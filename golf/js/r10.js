@@ -159,6 +159,8 @@ const R10 = {
   setStatus(status, text) {
     if (status !== this.status || text !== this.statusText) this.addLog(`status ${status}: ${text}`);
     this.status = status; this.statusText = text; this.emit('status', status, text);
+    if (this.phase === 'active') this.autoTries = 0;
+    r10KeepAwake(this.phase !== 'idle');
   },
 
   async connect() {
@@ -174,6 +176,7 @@ const R10 = {
       if (e.name !== 'NotFoundError') this.setStatus('error', 'Bluetooth error: ' + e.message);
       return; // NotFoundError = the user closed the device chooser
     }
+    this.wanted = true;
     if (this.device !== device) {
       this.device = device;
       device.addEventListener('gattserverdisconnected', () => this.onDisconnected());
@@ -227,7 +230,7 @@ const R10 = {
   },
 
   disconnect() {
-    this.closing = true;
+    this.closing = true; this.wanted = false;
     clearTimeout(this.timer);
     try { this.device && this.device.gatt.connected && this.device.gatt.disconnect(); } catch {}
     this.phase = 'idle';
@@ -247,6 +250,7 @@ const R10 = {
     const wasClosing = this.closing;
     this.phase = 'idle';
     if (!wasClosing) this.setStatus('disconnected', 'Connection lost — the R10 may be off or out of range.');
+    r10AutoReconnect(3000);
   },
 
   // GATT operations must not overlap, so writes are chained
@@ -462,3 +466,40 @@ function r10ParseDeviceInfo(p) {
   };
   return { protocol: u16(0), product: u16(2), software: u16(8), friendlyName: str(), deviceName: str(), model: str() };
 }
+
+// ════════════════════════════════════════════════════════════
+// STAYING CONNECTED ON A PHONE
+// A phone that sleeps, or a switch to another app, pauses the page and drops
+// the R10. So while connected the screen is kept awake (Wake Lock), and if the
+// link drops anyway it's re-opened when the page is back in front — up to
+// three tries, so an R10 that's switched off isn't retried forever.
+// ════════════════════════════════════════════════════════════
+let r10Wake = null;
+async function r10KeepAwake(on) {
+  if (!('wakeLock' in navigator)) return;
+  let mine = false;
+  try {
+    if (on && !r10Wake && !r10KeepAwake.asking && document.visibilityState === 'visible') {
+      r10KeepAwake.asking = mine = true;
+      const w = await navigator.wakeLock.request('screen');
+      if (R10.phase === 'idle') return w.release(); // disconnected while asking
+      r10Wake = w;
+      w.addEventListener('release', () => { if (r10Wake === w) r10Wake = null; });
+    } else if (!on && r10Wake) { const w = r10Wake; r10Wake = null; await w.release(); }
+  } catch (e) { R10.addLog('screen wake lock unavailable: ' + e.message); }
+  finally { if (mine) r10KeepAwake.asking = false; }
+}
+function r10AutoReconnect(delay) {
+  clearTimeout(r10AutoReconnect.timer);
+  r10AutoReconnect.timer = setTimeout(() => {
+    if (!R10.wanted || !R10.device || R10.phase !== 'idle' || document.visibilityState !== 'visible') return;
+    if ((R10.autoTries = (R10.autoTries || 0) + 1) > 3) return;
+    R10.addLog(`auto-reconnect (try ${R10.autoTries} of 3)`);
+    R10.reconnect();
+  }, delay);
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible') return;
+  if (R10.phase !== 'idle') r10KeepAwake(true); // the browser releases the lock when the page is hidden
+  else r10AutoReconnect(500);
+});
