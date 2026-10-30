@@ -1,0 +1,20 @@
+{
+  "name": "Stueber Road Trip Showdown",
+  "short_name": "Stueber Showdown",
+  "description": "The ultimate Stueber family car game — trivia, bingo, scavenger hunt, dares, and Al the AI host.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#130e2e",
+  "theme_color": "#130e2e",
+  "categories": ["games", "entertainment", "kids"],
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

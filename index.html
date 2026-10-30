@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Stueber Family Apps</title>
+<meta name="theme-color" content="#0d1020">
+<link rel="icon" href="golf/icons/icon-192.png">
+<style>
+  :root {
+    --bg: #0d1020; --card: #161b33; --card-hi: #1e2546; --line: #2a3260;
+    --text: #e8e4d8; --muted: #9a98a8; --accent: #f4a261;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: radial-gradient(1200px 600px at 50% -200px, #1f2a5a 0%, var(--bg) 60%) var(--bg) no-repeat;
+    color: var(--text);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    min-height: 100vh;
+    padding: 48px 16px 32px;
+  }
+  header { text-align: center; margin-bottom: 36px; }
+  header h1 { font-size: clamp(1.7rem, 5vw, 2.6rem); font-weight: 900; letter-spacing: -0.5px; }
+  header p { color: var(--muted); margin-top: 8px; }
+
+  .section { max-width: 1040px; margin: 0 auto 32px; }
+  .section h2 { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 2px; color: var(--muted); margin: 0 4px 12px; }
+  .apps { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 16px; }
+
+  .app {
+    display: flex; flex-direction: column;
+    background: var(--card); border: 1px solid var(--line); border-radius: 18px;
+    padding: 22px; color: inherit; text-decoration: none;
+    transition: transform 0.15s, background 0.15s, border-color 0.15s;
+  }
+  .app:hover, .app:focus-visible { transform: translateY(-3px); background: var(--card-hi); border-color: var(--c, var(--accent)); outline: none; }
+  .app-top { display: flex; align-items: center; gap: 14px; margin-bottom: 12px; }
+  .app-icon {
+    width: 56px; height: 56px; flex: none; border-radius: 14px;
+    display: flex; align-items: center; justify-content: center; font-size: 30px;
+    background: color-mix(in srgb, var(--c) 22%, transparent);
+  }
+  .app-icon img { width: 100%; height: 100%; border-radius: 14px; }
+  .app-title { font-size: 1.15rem; font-weight: 800; }
+  .app-tag { font-size: 0.75rem; color: var(--c); font-weight: 700; margin-top: 2px; }
+  .app-desc { font-size: 0.9rem; line-height: 1.5; color: var(--muted); flex: 1; }
+  .app-foot { display: flex; align-items: center; justify-content: space-between; margin-top: 18px; gap: 8px; }
+  .open {
+    background: var(--c); color: #10121f; font-weight: 800; font-size: 0.88rem;
+    padding: 8px 16px; border-radius: 999px;
+  }
+  .note { font-size: 0.72rem; color: var(--muted); }
+
+  footer { text-align: center; color: var(--muted); font-size: 0.8rem; margin-top: 16px; line-height: 1.7; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Stueber Family Apps</h1>
+  <p>Everything we've built, in one place</p>
+</header>
+
+<div class="section">
+  <h2>Tools</h2>
+  <div class="apps">
+    <a class="app" href="golf-improvement-app" style="--c:#52b788">
+      <div class="app-top">
+        <div class="app-icon"><img src="golf/icons/icon-192.png" alt=""></div>
+        <div>
+          <div class="app-title">Golf Improvement</div>
+          <div class="app-tag">Golf · Garmin R10</div>
+        </div>
+      </div>
+      <div class="app-desc">
+        Rounds and handicap, strokes gained, an improvement coach, speed training,
+        R10 range sessions and drills, and Apex, a full 3D jungle course.
+      </div>
+      <div class="app-foot"><span class="note">Installable · works offline</span><span class="open">Open</span></div>
+    </a>
+  </div>
+</div>
+
+<div class="section">
+  <h2>Games</h2>
+  <div class="apps">
+    <a class="app" href="roadtrip-game/" style="--c:#c77dff">
+      <div class="app-top">
+        <div class="app-icon"><img src="roadtrip-game/icon.svg" alt=""></div>
+        <div>
+          <div class="app-title">Road Trip Showdown</div>
+          <div class="app-tag">Car game · Whole family</div>
+        </div>
+      </div>
+      <div class="app-desc">
+        The ultimate Stueber car game: trivia, bingo, a scavenger hunt and dares,
+        hosted by Al.
+      </div>
+      <div class="app-foot"><span class="note">Installable</span><span class="open">Play</span></div>
+    </a>
+
+    <a class="app" href="onalaska-trail.html" style="--c:#e9c46a">
+      <div class="app-top">
+        <div class="app-icon">🦌</div>
+        <div>
+          <div class="app-title">The Onalaska Trail</div>
+          <div class="app-tag">Adventure · 5 routes</div>
+        </div>
+      </div>
+      <div class="app-desc">
+        Pick your destination, from a 100-mile Driftless ramble to an epic haul to the Yukon.
+        Hunt, fish, barter, brave the seasons, and beat the Janssens there.
+      </div>
+      <div class="app-foot"><span class="note">Wisconsin to Yukon</span><span class="open">Play</span></div>
+    </a>
+
+    <a class="app" href="roadblasters/" style="--c:#ef476f">
+      <div class="app-top">
+        <div class="app-icon">🚗</div>
+        <div>
+          <div class="app-title">Roadblasters</div>
+          <div class="app-tag">Arcade · Driving</div>
+        </div>
+      </div>
+      <div class="app-desc">
+        Fast-paced arcade driving. Dodge obstacles, collect fuel,
+        and blast your way to the finish line.
+      </div>
+      <div class="app-foot"><span class="note">Keyboard · best on a computer</span><span class="open">Play</span></div>
+    </a>
+  </div>
+</div>
+
+<footer>
+  Made with ♥ for the Stueber family<br>
+  Apps save to the device you use them on — nothing is uploaded.
+</footer>
+
+</body>
+</html>

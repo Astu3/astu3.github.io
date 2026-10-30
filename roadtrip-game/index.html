@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#130e2e">
+<meta name="description" content="The Stueber family road trip game: plate hunt, scavenger hunt, bingo, trivia, dares and Al the AI host.">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" type="image/svg+xml" href="icon.svg">
+<link rel="apple-touch-icon" href="icon.svg">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Stueber Showdown">
+<meta name="mobile-web-app-capable" content="yes">
+<title>The Stueber Road Trip Showdown</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bungee&family=Nunito:wght@600;700;800;900&display=swap">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+
+<canvas id="confetti-canvas"></canvas>
+<div class="al-bubble" id="al-bubble" aria-live="polite"><span class="al-face">🎙️</span><span class="al-text" id="al-text"></span></div>
+<div class="toast" id="toast" role="status"></div>
+
+<main>
+  <section class="screen" id="s-setup"></section>
+  <section class="screen" id="s-home"></section>
+  <section class="screen" id="s-standings"></section>
+  <section class="screen" id="s-trivia-pick"></section>
+  <section class="screen" id="s-trivia"></section>
+  <section class="screen" id="s-trivia-result"></section>
+  <section class="screen" id="s-duel-pick"></section>
+  <section class="screen" id="s-duel"></section>
+  <section class="screen" id="s-duel-result"></section>
+  <section class="screen" id="s-plates"></section>
+  <section class="screen" id="s-hunt"></section>
+  <section class="screen" id="s-bingo"></section>
+  <section class="screen" id="s-dare"></section>
+  <section class="screen" id="s-wyr"></section>
+  <section class="screen" id="s-story"></section>
+  <section class="screen" id="s-stories"></section>
+  <section class="screen" id="s-wheel"></section>
+  <section class="screen" id="s-cards"></section>
+  <section class="screen" id="s-recap"></section>
+  <section class="screen" id="s-victory"></section>
+  <section class="screen" id="s-voice"></section>
+</main>
+
+<noscript><p style="padding:24px;color:#fff">The Showdown needs JavaScript turned on.</p></noscript>
+<script src="js/data.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>

@@ -1,10 +1,15 @@
-# This folder holds other projects too: only the golf app is tracked.
+# This folder holds other files too: only the published apps are tracked.
 /*
 !/.gitignore
+!/.nojekyll
+!/index.html
 !/golf-improvement-app.html
+!/golf-sw.js
+!/golf.webmanifest
 !/golf/
+!/onalaska-trail.html
+!/roadblasters/
+!/roadtrip-game/
 !/.claude/
 /.claude/*
 !/.claude/launch.json
-!/golf-sw.js
-!/golf.webmanifest

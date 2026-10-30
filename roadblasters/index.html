@@ -1,0 +1,1211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>ROADBLASTERS</title>
+<style>
+  html,body{margin:0;padding:0;background:#0a0a12;height:100%;overflow:hidden;
+    font-family:'Courier New',monospace;}
+  #wrap{display:flex;align-items:center;justify-content:center;height:100%;}
+  canvas{image-rendering:pixelated;image-rendering:crisp-edges;
+    box-shadow:0 0 40px rgba(255,80,0,0.25),0 0 0 4px #222,0 0 0 8px #444;
+    background:#000;}
+  #hint{position:fixed;bottom:6px;left:0;right:0;text-align:center;color:#555;
+    font-size:11px;letter-spacing:1px;}
+</style>
+</head>
+<body>
+<div id="wrap"><canvas id="c" width="800" height="600"></canvas></div>
+<div id="hint">ARROWS/WASD steer &amp; throttle &middot; SPACE fire &middot; SHIFT/X special &middot; ENTER start</div>
+<script>
+(function(){
+"use strict";
+
+/* =========================================================
+   SECTION: CONFIG
+   ========================================================= */
+const WIDTH = 800, HEIGHT = 600;
+const SEG_LEN = 200;              // length of one road segment
+const RUMBLE_LEN = 3;             // segments per rumble strip stripe
+const ROAD_W = 2200;              // half-width of road in world units
+const LANES = 3;
+const DRAW_DIST = 220;            // segments rendered per frame
+const FOV = 100;
+const CAM_HEIGHT = 1100;
+const CAM_DEPTH = 1 / Math.tan((FOV/2) * Math.PI/180);
+const FOG_DENSITY = 5;
+const centrifugal = 0.3;
+
+const KEY = {left:false,right:false,up:false,down:false,fire:false,special:false,enter:false};
+
+const COLORS = {
+  sky1:'#1b1030', sky2:'#54204a', sky3:'#ff7a3d',
+  mtn:'#3a2452', mtnDark:'#2a1a3d',
+  light:  {road:'#6b6b6f', grass:'#2d6e2f', rumble:'#d4d4d4', lane:'#d4d4d4'},
+  dark:   {road:'#636367', grass:'#256327', rumble:'#b23131', lane:null},
+  start:  {road:'#ffffff', grass:'#ffffff', rumble:'#ffffff', lane:'#ffffff'},
+  finish: {road:'#111111', grass:'#111111', rumble:'#111111', lane:'#111111'},
+};
+
+/* =========================================================
+   SECTION: AUDIO (safe, optional)
+   ========================================================= */
+const Sound = (function(){
+  let ctx = null;
+  try { ctx = new (window.AudioContext || window.webkitAudioContext)(); } catch(e){ ctx = null; }
+  function resume(){ if (ctx && ctx.state === 'suspended') { try{ctx.resume();}catch(e){} } }
+  function beep(freq, dur, type, vol, slideTo){
+    if (!ctx) return;
+    try{
+      const t0 = ctx.currentTime;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = type || 'square';
+      osc.frequency.setValueAtTime(freq, t0);
+      if (slideTo) osc.frequency.exponentialRampToValueAtTime(Math.max(1,slideTo), t0+dur);
+      gain.gain.setValueAtTime((vol!==undefined?vol:0.15), t0);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t0+dur);
+      osc.connect(gain); gain.connect(ctx.destination);
+      osc.start(t0); osc.stop(t0+dur+0.02);
+    }catch(e){}
+  }
+  return {
+    resume,
+    shoot(){ beep(900,0.08,'square',0.06,500); },
+    explode(){ beep(140,0.35,'sawtooth',0.18,40); beep(60,0.4,'triangle',0.12,20); },
+    fuel(){ beep(500,0.12,'sine',0.12,900); },
+    hit(){ beep(220,0.3,'sawtooth',0.15,50); },
+    pickup(){ beep(700,0.1,'triangle',0.14,1200); beep(1000,0.12,'triangle',0.1,1500); },
+    lowfuel(){ beep(300,0.15,'square',0.08,260); },
+    levelup(){ beep(500,0.15,'triangle',0.15,700); beep(750,0.2,'triangle',0.15,1000); },
+    gameover(){ beep(300,0.5,'sawtooth',0.15,50); },
+    turret(){ beep(400,0.08,'square',0.07,200); },
+  };
+})();
+
+/* =========================================================
+   SECTION: UTIL
+   ========================================================= */
+function mkRng(seed){
+  let s = seed >>> 0;
+  return function(){ s = (s*1664525 + 1013904223) >>> 0; return s / 4294967296; };
+}
+function clamp(v,min,max){ return Math.max(min, Math.min(max, v)); }
+function lerp(a,b,t){ return a + (b-a)*t; }
+function easeIn(a,b,t){ return a + (b-a)*t*t; }
+function easeInOut(a,b,t){ return a + (b-a)*((-Math.cos(t*Math.PI)/2)+0.5); }
+function overlap(x1,w1,x2,w2,pct){ pct = pct===undefined?1:pct; const half=(w1*pct)/2 + (w2*pct)/2; return Math.abs(x1-x2) < half; }
+function exponentialFog(distance, density){ return 1 / (Math.pow(Math.E, (distance*distance*density))); }
+
+/* =========================================================
+   SECTION: STATE MACHINE
+   ========================================================= */
+const STATE = { TITLE:'TITLE', PLAYING:'PLAYING', LEVEL_COMPLETE:'LEVEL_COMPLETE', GAMEOVER:'GAMEOVER', RESPAWN:'RESPAWN' };
+let game = {
+  state: STATE.TITLE,
+  score: 0,
+  highScore: parseInt(localStorage.getItem('rb_highscore')||'0',10),
+  level: 1,
+  multiplier: 1,
+  shotFiredWithoutHit: false,
+  fuel: 100,
+  maxFuel: 100,
+  ammo: 0,
+  weapon: null, // 'CANNON' | 'NITRO'
+  nitroTimer: 0,
+  stateTimer: 0,
+  shake: 0,
+  lastFinishScore: 0,
+};
+
+/* =========================================================
+   SECTION: TRACK / ROAD BUILDING
+   ========================================================= */
+let segments = [];
+let trackLength = 0;
+
+function lastY(){ return segments.length===0 ? 0 : segments[segments.length-1].p2.world.y; }
+
+function addSegment(curve, y, colorOverride){
+  const n = segments.length;
+  segments.push({
+    index: n,
+    p1: { world:{x:0,y:lastY(),z:n*SEG_LEN}, camera:{}, screen:{} },
+    p2: { world:{x:0,y:y,z:(n+1)*SEG_LEN}, camera:{}, screen:{} },
+    curve: curve,
+    sprites: [],
+    color: colorOverride || (Math.floor(n/RUMBLE_LEN)%2 ? COLORS.dark : COLORS.light),
+  });
+}
+
+function addRoad(enter, hold, leave, curve, yTarget){
+  const startY = lastY();
+  const total = enter+hold+leave;
+  let i;
+  for(i=0;i<enter;i++) addSegment(easeIn(0,curve,i/enter), easeInOut(startY,yTarget,i/total));
+  for(i=0;i<hold;i++) addSegment(curve, easeInOut(startY,yTarget,(enter+i)/total));
+  for(i=0;i<leave;i++) addSegment(easeInOut(curve,0,i/leave), easeInOut(startY,yTarget,(enter+hold+i)/total));
+}
+function addStraight(n, y){ addRoad(n,0,0,0, y===undefined?lastY():y); }
+function addCurve(n, curve, y){ addRoad(n,0,0,curve, y===undefined?lastY():y); }
+function addHill(n, height){ addRoad(n,0,0,0, height); }
+function addSCurves(){
+  addRoad(40,40,40,-2, lastY());
+  addRoad(40,40,40, 3, lastY());
+  addRoad(40,40,40,-3, lastY());
+  addRoad(40,40,40, 2, lastY());
+}
+
+function addStartLine(){
+  for(let i=0;i<6;i++) addSegment(0, lastY(), i%2===0? COLORS.start : COLORS.dark);
+}
+function addFinishLine(){
+  for(let i=0;i<8;i++) addSegment(0, lastY(), COLORS.finish);
+}
+
+let enemySpawns = [];   // {z, type, offset}
+let fuelSpawns = [];    // {z, offset, size}
+let mineSpawns = [];    // {z, offset}
+let turretSpawns = [];  // {z, side}
+
+function buildTrack(level){
+  segments = [];
+  enemySpawns = []; fuelSpawns = []; mineSpawns = []; turretSpawns = [];
+  const rng = mkRng(1337 + level*97);
+
+  addStraight(20);
+  addStartLine();
+  addStraight(30);
+
+  const curveIntensity = Math.min(6, 2 + level*0.5);
+  const numChunks = 8 + level*2;
+  for(let c=0;c<numChunks;c++){
+    const kind = rng();
+    if (kind < 0.35){
+      const curve = (rng()<0.5?-1:1) * (curveIntensity*(0.5+rng()));
+      addRoad(35,50,35, curve, lastY());
+    } else if (kind < 0.55){
+      const h = (rng()<0.5?-1:1) * 400 * (0.5+rng());
+      addRoad(30,40,30, 0, lastY()+h);
+    } else if (kind < 0.7){
+      addSCurves();
+    } else {
+      addStraight(40 + Math.floor(rng()*30));
+    }
+  }
+  addStraight(30, 0);
+  addFinishLine();
+  addStraight(15);
+
+  trackLength = segments.length * SEG_LEN;
+
+  // populate gameplay sprites deterministically across mid-track
+  const usableStart = 40, usableEnd = segments.length - 20;
+  const fuelCount = 6 + Math.floor(level*0.5);
+  for(let i=0;i<fuelCount;i++){
+    const seg = usableStart + Math.floor(rng()*(usableEnd-usableStart));
+    fuelSpawns.push({ z: seg*SEG_LEN + SEG_LEN/2, offset: (rng()*1.4-0.7), size: rng()<0.3?'big':'small', taken:false });
+  }
+  const enemyCount = 5 + level*3;
+  const types = ['stinger','ratjeep','moto'];
+  for(let i=0;i<enemyCount;i++){
+    const seg = usableStart + Math.floor(rng()*(usableEnd-usableStart));
+    const type = types[Math.floor(rng()*types.length)];
+    enemySpawns.push({ z: seg*SEG_LEN + SEG_LEN/2, type, offset:(rng()*1.6-0.8) });
+  }
+  const turretCount = Math.max(0, level-1) + Math.floor(rng()*2);
+  for(let i=0;i<turretCount;i++){
+    const seg = usableStart + Math.floor(rng()*(usableEnd-usableStart));
+    turretSpawns.push({ z: seg*SEG_LEN + SEG_LEN/2, side: rng()<0.5?-1:1 });
+  }
+  if (level >= 2){
+    const mineCount = level;
+    for(let i=0;i<mineCount;i++){
+      const seg = usableStart + Math.floor(rng()*(usableEnd-usableStart));
+      mineSpawns.push({ z: seg*SEG_LEN + SEG_LEN/2, offset:(rng()*1.2-0.6) });
+    }
+  }
+}
+
+function findSegment(z){
+  return segments[ Math.floor(z/SEG_LEN) % segments.length ];
+}
+
+/* =========================================================
+   SECTION: ENTITIES
+   ========================================================= */
+let player = { x:0, z:0, speed:0, lean:0, invuln:0 };
+const MAX_SPEED = 22000;    // world units / sec
+const ACCEL = 9000;
+const BRAKE = 14000;
+const DECEL = 4000;
+const OFFROAD_DECEL = 9000;
+const OFFROAD_LIMIT = MAX_SPEED*0.5;
+
+let enemies = [];    // {id,z,x,type,speed,alive,phase,shootTimer,dead,deadTimer}
+let mines = [];       // {z,x,alive}
+let fuelGlobes = [];  // {z,x,size,alive}
+let bullets = [];     // player bullets {z,x,dz}
+let enemyBullets = []; // {z,x,dz}
+let particles = [];   // explosion particles {x,y,vx,vy,life}
+let jet = { active:false, timer:8, x:0, dropped:false, screenX:0 };
+let pods = []; // {z,x,kind,alive}
+
+let entIdSeed = 1;
+
+function resetEntities(){
+  enemies = enemySpawns.map(s=>({ id:entIdSeed++, z:s.z, x:s.offset, type:s.type, speed: 4000+Math.random()*2000,
+     phase:Math.random()*Math.PI*2, alive:true, shootTimer:2+Math.random()*3, dead:false, deadTimer:0 }));
+  mines = mineSpawns.map(s=>({ z:s.z, x:s.offset, alive:true }));
+  fuelGlobes = fuelSpawns.map(s=>({ z:s.z, x:s.offset, size:s.size, alive:true }));
+  bullets = []; enemyBullets = []; particles = []; pods = [];
+  jet = { active:false, timer: 10+Math.random()*5, x:0, dropped:false, screenX:0 };
+}
+
+/* =========================================================
+   SECTION: INPUT
+   ========================================================= */
+window.addEventListener('keydown', e=>{
+  switch(e.code){
+    case 'ArrowLeft': case 'KeyA': KEY.left=true; break;
+    case 'ArrowRight': case 'KeyD': KEY.right=true; break;
+    case 'ArrowUp': case 'KeyW': KEY.up=true; break;
+    case 'ArrowDown': case 'KeyS': KEY.down=true; break;
+    case 'Space': KEY.fire=true; e.preventDefault(); break;
+    case 'ShiftLeft': case 'ShiftRight': case 'KeyX': KEY.special=true; break;
+    case 'Enter': KEY.enter=true; break;
+  }
+  Sound.resume();
+  if (['Space','ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.code)) e.preventDefault();
+});
+window.addEventListener('keyup', e=>{
+  switch(e.code){
+    case 'ArrowLeft': case 'KeyA': KEY.left=false; break;
+    case 'ArrowRight': case 'KeyD': KEY.right=false; break;
+    case 'ArrowUp': case 'KeyW': KEY.up=false; break;
+    case 'ArrowDown': case 'KeyS': KEY.down=false; break;
+    case 'Space': KEY.fire=false; break;
+    case 'ShiftLeft': case 'ShiftRight': case 'KeyX': KEY.special=false; break;
+    case 'Enter': KEY.enter=false; break;
+  }
+});
+
+/* =========================================================
+   SECTION: GAME FLOW
+   ========================================================= */
+function startGame(){
+  game.score = 0; game.level = 1; game.multiplier = 1; game.fuel = 100; game.maxFuel = 100;
+  game.ammo = 0; game.weapon = null; game.nitroTimer = 0; game.shake = 0;
+  player = { x:0, z:0, speed:0, lean:0, invuln:2 };
+  buildTrack(game.level);
+  resetEntities();
+  game.state = STATE.PLAYING;
+}
+
+function nextLevel(){
+  game.level++;
+  game.fuel = Math.min(game.maxFuel, game.fuel + 40);
+  player.x = 0; player.z = 0; player.speed = MAX_SPEED*0.4; player.invuln = 2;
+  buildTrack(game.level);
+  resetEntities();
+  game.state = STATE.PLAYING;
+}
+
+function killPlayer(){
+  if (player.invuln > 0) return;
+  Sound.explode();
+  spawnExplosion(WIDTH/2, HEIGHT-90, 40);
+  game.shake = 1.0;
+  game.multiplier = 1;
+  game.fuel = Math.max(0, game.fuel - 12);
+  player.speed *= 0.15;
+  player.invuln = 2.5;
+  if (game.fuel <= 0){
+    endGame();
+  }
+}
+
+function endGame(){
+  game.state = STATE.GAMEOVER;
+  game.stateTimer = 0;
+  Sound.gameover();
+  if (game.score > game.highScore){
+    game.highScore = game.score;
+    try{ localStorage.setItem('rb_highscore', String(game.highScore)); }catch(e){}
+  }
+}
+
+/* =========================================================
+   SECTION: UPDATE
+   ========================================================= */
+function spawnExplosion(sx, sy, n){
+  for(let i=0;i<n;i++){
+    const a = Math.random()*Math.PI*2, sp = 60+Math.random()*220;
+    particles.push({ x:sx, y:sy, vx:Math.cos(a)*sp, vy:Math.sin(a)*sp - 60, life: 0.4+Math.random()*0.5,
+      color: Math.random()<0.5?'#ff8a2b':(Math.random()<0.5?'#ffe14b':'#ff3b3b') });
+  }
+}
+
+function addScore(pts){
+  game.score += Math.round(pts * game.multiplier);
+}
+
+function registerKill(){
+  game.multiplier = clamp(game.multiplier+1, 1, 10);
+}
+function registerMiss(){
+  game.multiplier = 1;
+}
+
+function update(dt){
+  if (dt > 0.05) dt = 0.05;
+  updateAudioWarn(dt);
+
+  if (game.state === STATE.TITLE){
+    if (KEY.enter) startGame();
+    return;
+  }
+  if (game.state === STATE.LEVEL_COMPLETE){
+    game.stateTimer += dt;
+    if (game.stateTimer > 2.2 && KEY.enter) nextLevel();
+    else if (game.stateTimer > 5) nextLevel();
+    return;
+  }
+  if (game.state === STATE.GAMEOVER){
+    game.stateTimer += dt;
+    if (game.stateTimer > 1 && KEY.enter) game.state = STATE.TITLE;
+    return;
+  }
+
+  // ---- PLAYING ----
+  if (player.invuln > 0) player.invuln -= dt;
+  if (game.nitroTimer > 0){
+    game.nitroTimer -= dt;
+    if (game.nitroTimer <= 0) game.weapon = null;
+  }
+
+  const seg = findSegment(player.z);
+  const speedPct = player.speed / MAX_SPEED;
+
+  // steering
+  const steerAmt = 2.2 * dt * (0.3+speedPct);
+  if (KEY.left) player.x -= steerAmt;
+  if (KEY.right) player.x += steerAmt;
+  // curve pulls car
+  player.x -= (seg.curve * speedPct * centrifugal) * dt * 2;
+  player.lean = lerp(player.lean, (KEY.left?-1:KEY.right?1:0)*0.5, 0.2);
+
+  // throttle
+  const nitro = game.weapon==='NITRO' && game.nitroTimer>0;
+  const topSpeed = nitro? MAX_SPEED*1.6 : MAX_SPEED;
+  if (KEY.up) player.speed += ACCEL*dt;
+  else if (KEY.down) player.speed -= BRAKE*dt;
+  else player.speed -= DECEL*dt;
+
+  const offroad = Math.abs(player.x) > 1;
+  if (offroad && player.speed > OFFROAD_LIMIT) player.speed -= OFFROAD_DECEL*dt;
+
+  player.speed = clamp(player.speed, 0, topSpeed);
+  player.x = clamp(player.x, -3, 3);
+
+  player.z += player.speed*dt;
+  if (player.z >= trackLength - SEG_LEN*6){
+    // reached finish
+    completeLevel();
+    return;
+  }
+
+  // fuel drain
+  const drain = (1.1 + speedPct*2.6) * dt;
+  game.fuel -= drain;
+  if (game.fuel <= 0){
+    game.fuel = 0;
+    endGame();
+    return;
+  }
+
+  // firing
+  if (KEY.fire){
+    fireGun(dt);
+  }
+  fireCooldownTick(dt);
+
+  if (KEY.special && game.ammo>0 && !game.weapon){
+    activateSpecial();
+  }
+
+  updateJet(dt);
+  updateEnemies(dt);
+  updateMines(dt);
+  updateFuelGlobes(dt);
+  updateBullets(dt);
+  updateEnemyBullets(dt);
+  updatePods(dt);
+  updateParticles(dt);
+
+  if (game.shake > 0) game.shake = Math.max(0, game.shake - dt*2.2);
+}
+
+let fireCooldown = 0;
+function fireCooldownTick(dt){ if (fireCooldown>0) fireCooldown -= dt; }
+function fireGun(dt){
+  const rate = game.weapon==='CANNON' ? 0.08 : 0.22;
+  if (fireCooldown > 0) return;
+  fireCooldown = rate;
+  bullets.push({ z: player.z + 200, x: player.x, dz: 26000, hit:false });
+  Sound.shoot();
+  if (game.weapon==='CANNON'){
+    game.ammo--;
+    if (game.ammo<=0){ game.weapon=null; }
+  }
+}
+
+function activateSpecial(){
+  // ammo carries a "kind" via game.podKind set on pickup
+  if (game.podKind === 'NITRO'){
+    game.weapon = 'NITRO';
+    game.nitroTimer = 4;
+    player.invuln = Math.max(player.invuln, 4);
+    game.ammo = 0;
+  } else {
+    game.weapon = 'CANNON';
+  }
+}
+
+function completeLevel(){
+  addScore(500 + game.level*100);
+  game.state = STATE.LEVEL_COMPLETE;
+  game.stateTimer = 0;
+  Sound.levelup();
+}
+
+function updateJet(dt){
+  if (!jet.active){
+    jet.timer -= dt;
+    if (jet.timer <= 0){
+      jet.active = true; jet.dropped = false; jet.progress = 0;
+    }
+    return;
+  }
+  jet.progress = (jet.progress||0) + dt*0.35;
+  if (!jet.dropped && jet.progress > 0.45){
+    jet.dropped = true;
+    const kind = Math.random()<0.5 ? 'CANNON' : 'NITRO';
+    pods.push({ z: player.z + 3200, x: (Math.random()*1.2-0.6), kind, alive:true, y:0, falling:true });
+  }
+  if (jet.progress >= 1){
+    jet.active = false;
+    jet.timer = 16 + Math.random()*8;
+  }
+}
+
+function updatePods(dt){
+  for (const p of pods){
+    if (!p.alive) continue;
+    if (Math.abs(p.z - player.z) < 400 && overlap(player.x, 0.5, p.x, 0.5)){
+      p.alive = false;
+      game.ammo = p.kind==='CANNON' ? 40 : 1;
+      game.podKind = p.kind;
+      Sound.pickup();
+    }
+    if (p.z < player.z - 1000) p.alive = false;
+  }
+  pods = pods.filter(p=>p.alive);
+}
+
+function updateEnemies(dt){
+  for (const e of enemies){
+    if (e.dead){
+      e.deadTimer -= dt;
+      continue;
+    }
+    if (!e.alive) continue;
+    e.phase += dt;
+    if (e.type==='stinger'){
+      e.x += Math.sin(e.phase*1.6)*dt*0.6;
+      e.z += e.speed*dt*0.9;
+    } else if (e.type==='ratjeep'){
+      // tries to match player's lane to block
+      const target = clamp(player.x, -1, 1);
+      e.x += clamp(target-e.x, -1, 1)*dt*0.4;
+      e.z += e.speed*dt*0.6;
+    } else if (e.type==='moto'){
+      e.x += Math.sin(e.phase*3.2)*dt*1.4;
+      e.z += e.speed*dt*1.3;
+    } else if (e.type==='turret'){
+      e.shootTimer -= dt;
+      if (e.shootTimer <= 0 && Math.abs(e.z - player.z) < 6000){
+        e.shootTimer = 1.4 + Math.random();
+        enemyBullets.push({ z:e.z, x:e.x, dz:-9000 });
+        Sound.turret();
+      }
+    }
+    e.x = clamp(e.x, -1.3, 1.3);
+
+    // collision with player
+    if (Math.abs(e.z - player.z) < 350 && player.invuln<=0){
+      if (overlap(player.x, 0.5, e.x, 0.5)){
+        killPlayer();
+        if (e.type !== 'turret'){ e.dead = true; e.deadTimer = 0.6; e.alive=false; spawnExplosion(WIDTH/2, HEIGHT-120, 24); }
+      }
+    }
+  }
+  enemies = enemies.filter(e => e.alive || e.deadTimer>-1);
+}
+
+function updateMines(dt){
+  for (const m of mines){
+    if (!m.alive) continue;
+    if (Math.abs(m.z - player.z) < 300 && player.invuln<=0 && overlap(player.x, 0.35, m.x, 0.3)){
+      m.alive = false;
+      killPlayer();
+      spawnExplosion(WIDTH/2, HEIGHT-110, 26);
+    }
+  }
+}
+
+function updateFuelGlobes(dt){
+  for (const f of fuelGlobes){
+    if (!f.alive) continue;
+    if (Math.abs(f.z - player.z) < 320 && overlap(player.x, 0.45, f.x, 0.35)){
+      f.alive = false;
+      const amt = f.size==='big' ? 35 : 15;
+      game.fuel = Math.min(game.maxFuel, game.fuel + amt);
+      addScore(50);
+      Sound.fuel();
+    }
+  }
+}
+
+function updateBullets(dt){
+  for (const b of bullets){
+    if (b.hit) continue;
+    b.z += b.dz*dt;
+    if (b.z - player.z > DRAW_DIST*SEG_LEN){
+      b.hit = true;
+      registerMiss();
+      continue;
+    }
+    for (const e of enemies){
+      if (!e.alive) continue;
+      if (Math.abs(e.z - b.z) < 260 && overlap(b.x, 0.25, e.x, 0.45)){
+        b.hit = true;
+        e.alive = false; e.dead = true; e.deadTimer = 0.6;
+        registerKill();
+        addScore(e.type==='turret'?150:100);
+        spawnExplosionWorld(e.z, e.x);
+        Sound.explode();
+        if (Math.random() < 0.35){
+          fuelGlobes.push({ z:e.z, x:e.x, size:'small', alive:true });
+        }
+        break;
+      }
+    }
+  }
+  bullets = bullets.filter(b=>!b.hit);
+}
+
+function updateEnemyBullets(dt){
+  for (const b of enemyBullets){
+    b.z += b.dz*dt;
+    if (Math.abs(b.z - player.z) < 260 && player.invuln<=0 && overlap(b.x, 0.3, player.x, 0.4)){
+      b.dead = true;
+      killPlayer();
+    }
+    if (b.z < player.z - 2000) b.dead = true;
+  }
+  enemyBullets = enemyBullets.filter(b=>!b.dead);
+}
+
+function spawnExplosionWorld(z,x){
+  // approximate screen position for the currently-visible explosion (rough, near horizon-scaled)
+  const dz = z - player.z;
+  const scale = CAM_DEPTH / Math.max(1,dz);
+  const sx = WIDTH/2 + scale*x*ROAD_W*WIDTH/2;
+  const sy = HEIGHT/2 - scale*0*HEIGHT/2;
+  spawnExplosion(clamp(sx,0,WIDTH), clamp(sy,HEIGHT*0.3,HEIGHT*0.85), 18);
+}
+
+function updateParticles(dt){
+  for (const p of particles){
+    p.x += p.vx*dt; p.y += p.vy*dt; p.vy += 260*dt;
+    p.life -= dt;
+  }
+  particles = particles.filter(p=>p.life>0);
+}
+
+let lowFuelBeepTimer = 0;
+function updateAudioWarn(dt){
+  if (game.state !== STATE.PLAYING) return;
+  if (game.fuel < 20){
+    lowFuelBeepTimer -= dt;
+    if (lowFuelBeepTimer <= 0){
+      Sound.lowfuel();
+      lowFuelBeepTimer = 0.6;
+    }
+  }
+}
+
+/* =========================================================
+   SECTION: RENDER - ROAD
+   ========================================================= */
+const ctx = document.getElementById('c').getContext('2d');
+ctx.imageSmoothingEnabled = false;
+
+function project(p, camX, camY, camZ){
+  p.camera.x = (p.world.x||0) - camX;
+  p.camera.y = (p.world.y||0) - camY;
+  p.camera.z = (p.world.z||0) - camZ;
+  p.screen.scale = CAM_DEPTH / p.camera.z;
+  p.screen.x = Math.round((WIDTH/2) + (p.screen.scale * p.camera.x * WIDTH/2));
+  p.screen.y = Math.round((HEIGHT/2) - (p.screen.scale * p.camera.y * HEIGHT/2));
+  p.screen.w = Math.round(p.screen.scale * ROAD_W * WIDTH/2);
+}
+
+function poly(x1,y1,x2,y2,x3,y3,x4,y4,color){
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.lineTo(x3,y3); ctx.lineTo(x4,y4);
+  ctx.closePath(); ctx.fill();
+}
+
+function drawSky(){
+  const g = ctx.createLinearGradient(0,0,0,HEIGHT*0.5);
+  g.addColorStop(0, COLORS.sky1);
+  g.addColorStop(0.6, COLORS.sky2);
+  g.addColorStop(1, COLORS.sky3);
+  ctx.fillStyle = g;
+  ctx.fillRect(0,0,WIDTH,HEIGHT);
+  // sun
+  ctx.fillStyle = '#ffd23f';
+  ctx.beginPath(); ctx.arc(WIDTH*0.78, HEIGHT*0.34, 46, 0, Math.PI*2); ctx.fill();
+  // mountains (parallax by player x)
+  const off = (player.x*40) % WIDTH;
+  ctx.fillStyle = COLORS.mtnDark;
+  drawMountainRow(off, HEIGHT*0.48, 70, 0.7);
+  ctx.fillStyle = COLORS.mtn;
+  drawMountainRow(off*1.6, HEIGHT*0.5, 100, 1);
+}
+function drawMountainRow(offset, baseY, amp, scale){
+  ctx.beginPath();
+  ctx.moveTo(-100, baseY);
+  for (let x=-100; x<=WIDTH+100; x+=60){
+    const h = amp*scale*(0.5+0.5*Math.sin((x+offset)*0.008 + scale*3));
+    ctx.lineTo(x, baseY - h);
+  }
+  ctx.lineTo(WIDTH+100, baseY);
+  ctx.closePath();
+  ctx.fill();
+}
+
+function renderRoadSegment(p1,p2,color){
+  const r1 = p1.w/Math.max(6, LANES*2), r2 = p2.w/Math.max(6, LANES*2);
+  const l1 = p1.w*2/LANES*0.08, l2 = p2.w*2/LANES*0.08;
+
+  ctx.fillStyle = color.grass;
+  ctx.fillRect(0, p2.y, WIDTH, p1.y - p2.y);
+
+  poly(p1.x-p1.w-r1, p1.y, p1.x-p1.w, p1.y, p2.x-p2.w, p2.y, p2.x-p2.w-r2, p2.y, color.rumble);
+  poly(p1.x+p1.w, p1.y, p1.x+p1.w+r1, p1.y, p2.x+p2.w+r2, p2.y, p2.x+p2.w, p2.y, color.rumble);
+  poly(p1.x-p1.w, p1.y, p1.x+p1.w, p1.y, p2.x+p2.w, p2.y, p2.x-p2.w, p2.y, color.road);
+
+  if (color.lane){
+    const lw1 = (p1.w*2)/LANES, lw2 = (p2.w*2)/LANES;
+    let lx1 = p1.x - p1.w + lw1, lx2 = p2.x - p2.w + lw2;
+    for (let lane=1; lane<LANES; lane++, lx1+=lw1, lx2+=lw2){
+      poly(lx1-l1/2, p1.y, lx1+l1/2, p1.y, lx2+l2/2, p2.y, lx2-l2/2, p2.y, color.lane);
+    }
+  }
+}
+
+function renderRoad(){
+  const baseSegment = findSegment(player.z);
+  const basePercent = (player.z % SEG_LEN) / SEG_LEN;
+  const playerSegment = baseSegment;
+  const playerY = lerp(playerSegment.p1.world.y, playerSegment.p2.world.y, basePercent);
+  let maxy = HEIGHT;
+  let x = 0, dx = -(baseSegment.curve * basePercent);
+
+  const camX = player.x * ROAD_W;
+  const camY = playerY + CAM_HEIGHT;
+  const camZ = player.z;
+
+  const visibleSprites = [];
+
+  for (let n=0; n<DRAW_DIST; n++){
+    const segIndex = (baseSegment.index + n) % segments.length;
+    const segment = segments[segIndex];
+    const looped = segIndex < baseSegment.index;
+    const segZ = segment.p1.world.z + (looped ? trackLength : 0);
+    const seg2Z = segment.p2.world.z + (looped ? trackLength : 0);
+
+    project(segment.p1, camX - x, camY, camZ);
+    segment.p1.world.z = looped ? segment.p1.world.z : segment.p1.world.z; // no-op keep
+    // manual z override for looping handled via camZ offset trick below
+    segment.p1.camera.z = segZ - camZ;
+    segment.p1.screen.scale = CAM_DEPTH / Math.max(1,segment.p1.camera.z);
+    segment.p1.screen.x = Math.round(WIDTH/2 + segment.p1.screen.scale*segment.p1.camera.x*WIDTH/2);
+    segment.p1.screen.y = Math.round(HEIGHT/2 - segment.p1.screen.scale*segment.p1.camera.y*HEIGHT/2);
+    segment.p1.screen.w = Math.round(segment.p1.screen.scale*ROAD_W*WIDTH/2);
+
+    project(segment.p2, camX - x - dx, camY, camZ);
+    segment.p2.camera.z = seg2Z - camZ;
+    segment.p2.screen.scale = CAM_DEPTH / Math.max(1,segment.p2.camera.z);
+    segment.p2.screen.x = Math.round(WIDTH/2 + segment.p2.screen.scale*segment.p2.camera.x*WIDTH/2);
+    segment.p2.screen.y = Math.round(HEIGHT/2 - segment.p2.screen.scale*segment.p2.camera.y*HEIGHT/2);
+    segment.p2.screen.w = Math.round(segment.p2.screen.scale*ROAD_W*WIDTH/2);
+
+    x += dx;
+    dx += segment.curve;
+
+    if (segment.p1.camera.z <= CAM_DEPTH) continue;
+    if (segment.p2.screen.y >= segment.p1.screen.y) continue;
+    if (segment.p2.screen.y >= maxy) continue;
+
+    renderRoadSegment(segment.p1.screen, segment.p2.screen, segment.color);
+    maxy = segment.p2.screen.y;
+
+    visibleSprites.push({ segment, segZ, p1:segment.p1, p2:segment.p2 });
+  }
+
+  return visibleSprites;
+}
+
+/* Simplified sprite projector: uses same incremental x accumulation as renderRoad,
+   applied per-sprite by walking segments once per frame (cached). */
+function buildProjector(){
+  const baseSegment = findSegment(player.z);
+  const basePercent = (player.z % SEG_LEN)/SEG_LEN;
+  const playerY = lerp(baseSegment.p1.world.y, baseSegment.p2.world.y, basePercent);
+  const camX = player.x*ROAD_W, camY = playerY+CAM_HEIGHT, camZ = player.z;
+  let x=0, dx=-(baseSegment.curve*basePercent);
+  const table = new Map(); // segIndex(within window) -> accumulated x offset
+  for (let n=0;n<DRAW_DIST;n++){
+    const segIndex = (baseSegment.index+n) % segments.length;
+    table.set(segIndex, x);
+    x += dx;
+    dx += segments[segIndex].curve;
+  }
+  return function(z, xOff, yOff){
+    const looped = z < player.z;
+    const zz = looped ? z + trackLength : z;
+    const dz = zz - camZ;
+    if (dz <= CAM_DEPTH) return null;
+    const segIdx = Math.floor(z/SEG_LEN) % segments.length;
+    const accX = table.has(segIdx) ? table.get(segIdx) : null;
+    if (accX===null) return null;
+    const seg = segments[segIdx];
+    const percent = (z % SEG_LEN)/SEG_LEN;
+    const worldY = lerp(seg.p1.world.y, seg.p2.world.y, percent) + (yOff||0);
+    const worldX = xOff*ROAD_W;
+    const scale = CAM_DEPTH/dz;
+    const sx = Math.round(WIDTH/2 + scale*(worldX - camX + accX)*WIDTH/2);
+    const sy = Math.round(HEIGHT/2 - scale*(worldY - camY)*HEIGHT/2);
+    const sw = scale*ROAD_W*WIDTH/2;
+    return {x:sx, y:sy, scale, w:sw, dz};
+  };
+}
+
+/* =========================================================
+   SECTION: RENDER - SPRITES / ENTITIES
+   ========================================================= */
+function drawFuelGlobe(cx,cy,r,color){
+  ctx.save();
+  ctx.fillStyle = color;
+  ctx.beginPath(); ctx.arc(cx,cy,r,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle = 'rgba(255,255,255,0.55)';
+  ctx.beginPath(); ctx.arc(cx-r*0.3,cy-r*0.3,r*0.35,0,Math.PI*2); ctx.fill();
+  ctx.strokeStyle = 'rgba(0,0,0,0.4)'; ctx.lineWidth=Math.max(1,r*0.12); ctx.stroke();
+  ctx.restore();
+}
+
+function drawMine(cx,cy,r){
+  ctx.save();
+  ctx.fillStyle = '#222';
+  ctx.beginPath(); ctx.arc(cx,cy,r,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#e04b2b';
+  for (let i=0;i<6;i++){
+    const a = i/6*Math.PI*2;
+    ctx.beginPath();
+    ctx.arc(cx+Math.cos(a)*r*0.9, cy+Math.sin(a)*r*0.9, r*0.22,0,Math.PI*2);
+    ctx.fill();
+  }
+  ctx.fillStyle = '#ff2b2b';
+  ctx.beginPath(); ctx.arc(cx,cy,r*0.3,0,Math.PI*2); ctx.fill();
+  ctx.restore();
+}
+
+function drawCarSprite(cx, cy, w, type, lean){
+  const s = w/70; // scale factor relative to base width
+  ctx.save();
+  ctx.translate(cx,cy);
+  ctx.scale(s,s);
+  if (lean) ctx.rotate(lean*0.08);
+  let body='#2b6fe0', dark='#173d8a', win='#111';
+  if (type==='stinger'){ body='#2b6fe0'; dark='#123a8f'; }
+  else if (type==='ratjeep'){ body='#e08a2b'; dark='#8a4e10'; }
+  else if (type==='moto'){ body='#c92b6b'; dark='#7a1440'; }
+  if (type==='moto'){
+    ctx.fillStyle = dark; ctx.fillRect(-6,-4,12,26);
+    ctx.fillStyle = body; ctx.fillRect(-9,-14,18,14);
+    ctx.fillStyle = '#111'; ctx.fillRect(-7,-13,14,6);
+    ctx.fillStyle='#111'; ctx.beginPath(); ctx.arc(0,14,7,0,Math.PI*2); ctx.fill();
+  } else {
+    ctx.fillStyle = dark;
+    ctx.beginPath();
+    ctx.moveTo(-24,20); ctx.lineTo(-20,-6); ctx.lineTo(-10,-20); ctx.lineTo(10,-20);
+    ctx.lineTo(20,-6); ctx.lineTo(24,20); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = body;
+    ctx.beginPath();
+    ctx.moveTo(-20,18); ctx.lineTo(-17,-4); ctx.lineTo(-8,-17); ctx.lineTo(8,-17);
+    ctx.lineTo(17,-4); ctx.lineTo(20,18); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = win;
+    ctx.fillRect(-9,-13,18,9);
+    ctx.fillStyle = dark;
+    ctx.fillRect(-22,16,10,6); ctx.fillRect(12,16,10,6);
+  }
+  ctx.restore();
+}
+
+function drawTurret(cx, cy, w){
+  const s = w/70;
+  ctx.save();
+  ctx.translate(cx,cy); ctx.scale(s,s);
+  ctx.fillStyle = '#555';
+  ctx.fillRect(-14,-6,28,16);
+  ctx.fillStyle = '#333';
+  ctx.beginPath(); ctx.arc(0,-6,12,Math.PI,0); ctx.fill();
+  ctx.fillStyle = '#222';
+  ctx.fillRect(-3,-24,6,20);
+  ctx.restore();
+}
+
+function drawJet(cx,cy,scale){
+  ctx.save();
+  ctx.translate(cx,cy); ctx.scale(scale,scale);
+  ctx.fillStyle = '#888';
+  ctx.beginPath();
+  ctx.moveTo(-40,0); ctx.lineTo(30,-6); ctx.lineTo(40,0); ctx.lineTo(30,6); ctx.closePath(); ctx.fill();
+  ctx.fillStyle = '#c33';
+  ctx.fillRect(-10,-3,16,6);
+  ctx.restore();
+}
+
+function drawPod(cx,cy,r,kind){
+  ctx.save();
+  ctx.fillStyle = kind==='NITRO' ? '#3fd0ff' : '#ffd23f';
+  ctx.beginPath(); ctx.arc(cx,cy,r,0,Math.PI*2); ctx.fill();
+  ctx.strokeStyle = '#fff'; ctx.lineWidth=2; ctx.stroke();
+  ctx.fillStyle = '#111';
+  ctx.font = `bold ${Math.max(8,r)}px monospace`;
+  ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillText(kind==='NITRO'?'N':'C', cx, cy+1);
+  ctx.restore();
+}
+
+function drawPlayerCar(){
+  const dt_lean = clamp(player.lean,-1,1);
+  const bounce = Math.sin(performance.now()*0.02)*1.2*Math.min(1,player.speed/MAX_SPEED);
+  const cx = WIDTH/2 + player.x*40, cy = HEIGHT-92+bounce;
+  const flicker = player.invuln>0 && Math.floor(performance.now()/80)%2===0;
+  if (flicker) ctx.globalAlpha = 0.4;
+  ctx.save();
+  ctx.translate(cx,cy);
+  ctx.rotate(dt_lean*0.12);
+  ctx.scale(1.9,1.9);
+  // shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.35)';
+  ctx.beginPath(); ctx.ellipse(0,26,26,7,0,0,Math.PI*2); ctx.fill();
+  // rear wing
+  ctx.fillStyle = '#8a1010';
+  ctx.fillRect(-22,10,44,6);
+  ctx.fillRect(-22,4,6,12); ctx.fillRect(16,4,6,12);
+  // body
+  ctx.fillStyle = '#c21818';
+  ctx.beginPath();
+  ctx.moveTo(-22,22); ctx.lineTo(-20,0); ctx.lineTo(-10,-24); ctx.lineTo(10,-24);
+  ctx.lineTo(20,0); ctx.lineTo(22,22); ctx.closePath(); ctx.fill();
+  ctx.fillStyle = '#e83030';
+  ctx.beginPath();
+  ctx.moveTo(-17,18); ctx.lineTo(-15,-2); ctx.lineTo(-8,-20); ctx.lineTo(8,-20);
+  ctx.lineTo(15,-2); ctx.lineTo(17,18); ctx.closePath(); ctx.fill();
+  // windshield
+  ctx.fillStyle = '#0a0a0a';
+  ctx.beginPath();
+  ctx.moveTo(-9,-15); ctx.lineTo(9,-15); ctx.lineTo(6,-2); ctx.lineTo(-6,-2); ctx.closePath(); ctx.fill();
+  // stripes
+  ctx.fillStyle = '#ffe14b';
+  ctx.fillRect(-3,-22,2,44); ctx.fillRect(1,-22,2,44);
+  // tail lights
+  if (nitroFlame()) {
+    ctx.fillStyle = '#3fd0ff';
+    ctx.beginPath(); ctx.moveTo(-8,24); ctx.lineTo(0,24+18+Math.random()*10); ctx.lineTo(8,24); ctx.closePath(); ctx.fill();
+  }
+  ctx.fillStyle = '#ffcf3f';
+  ctx.fillRect(-20,18,6,4); ctx.fillRect(14,18,6,4);
+  ctx.restore();
+  if (flicker) ctx.globalAlpha = 1;
+}
+function nitroFlame(){ return game.weapon==='NITRO' && game.nitroTimer>0; }
+
+/* =========================================================
+   SECTION: MAIN RENDER
+   ========================================================= */
+function render(){
+  ctx.save();
+  if (game.shake>0){
+    const s = game.shake*10;
+    ctx.translate((Math.random()*2-1)*s, (Math.random()*2-1)*s);
+  }
+  drawSky();
+
+  if (game.state===STATE.TITLE){
+    renderTitle();
+    ctx.restore();
+    return;
+  }
+
+  renderRoad();
+  const project2 = buildProjector();
+
+  const drawables = [];
+  for (const f of fuelGlobes){ if (!f.alive) continue; const p = project2(f.z, f.x, 0); if (p && p.w>0.5) drawables.push({p, kind:'fuel', ref:f}); }
+  for (const m of mines){ if (!m.alive) continue; const p = project2(m.z, m.x, 0); if (p && p.w>0.5) drawables.push({p, kind:'mine', ref:m}); }
+  for (const e of enemies){ const p = project2(e.z, e.x, 0); if (p && p.w>0.5) drawables.push({p, kind:e.type, ref:e}); }
+  for (const b of bullets){ const p = project2(b.z, b.x, 40); if (p && p.w>0.2) drawables.push({p, kind:'bullet', ref:b}); }
+  for (const b of enemyBullets){ const p = project2(b.z, b.x, 40); if (p && p.w>0.2) drawables.push({p, kind:'ebullet', ref:b}); }
+  for (const pd of pods){ if(!pd.alive) continue; const p = project2(pd.z, pd.x, 300); if (p && p.w>0.5) drawables.push({p, kind:'pod', ref:pd}); }
+
+  drawables.sort((a,b)=> b.p.dz - a.p.dz);
+
+  for (const d of drawables){
+    const {p} = d;
+    if (p.y < -50 || p.y > HEIGHT+50) continue;
+    const w = clamp(p.w*0.22, 2, 220);
+    if (d.kind==='fuel'){
+      drawFuelGlobe(p.x, p.y, clamp(w*0.35,3,26), d.ref.size==='big' ? '#ff3333' : '#33cc55');
+    } else if (d.kind==='mine'){
+      drawMine(p.x, p.y, clamp(w*0.3,3,20));
+    } else if (d.kind==='turret'){
+      drawTurret(p.x, p.y, w);
+    } else if (d.kind==='bullet'){
+      ctx.fillStyle = '#ffe14b';
+      ctx.fillRect(p.x-2, p.y-8, 4, 14);
+    } else if (d.kind==='ebullet'){
+      ctx.fillStyle = '#ff3f3f';
+      ctx.beginPath(); ctx.arc(p.x,p.y,4,0,Math.PI*2); ctx.fill();
+    } else if (d.kind==='pod'){
+      drawPod(p.x,p.y, clamp(w*0.3,6,22), d.ref.kind);
+    } else {
+      drawCarSprite(p.x, p.y, w, d.kind, Math.sin(performance.now()*0.005+d.p.x)*0.3);
+    }
+  }
+
+  // jet overhead
+  if (jet.active){
+    const jx = WIDTH*0.15 + WIDTH*0.7*(jet.progress||0);
+    const jy = 70 + Math.sin((jet.progress||0)*Math.PI)*20;
+    drawJet(jx, jy, 1.4);
+  }
+
+  // explosion particles
+  for (const p of particles){
+    ctx.fillStyle = p.color;
+    ctx.globalAlpha = clamp(p.life,0,1);
+    ctx.fillRect(p.x-3,p.y-3,6,6);
+  }
+  ctx.globalAlpha = 1;
+
+  drawPlayerCar();
+
+  ctx.restore();
+  drawHUD();
+
+  if (game.state===STATE.LEVEL_COMPLETE) renderLevelComplete();
+  if (game.state===STATE.GAMEOVER) renderGameOver();
+}
+
+/* =========================================================
+   SECTION: HUD
+   ========================================================= */
+function drawHUD(){
+  ctx.save();
+  ctx.textBaseline='top';
+  ctx.font = 'bold 20px monospace';
+  ctx.fillStyle = '#fff';
+  ctx.fillText('SCORE '+String(game.score).padStart(6,'0'), 14, 12);
+  ctx.fillStyle = '#ffd23f';
+  ctx.font = 'bold 14px monospace';
+  ctx.fillText('HI '+String(game.highScore).padStart(6,'0'), 14, 36);
+
+  ctx.textAlign='right';
+  ctx.fillStyle='#fff';
+  ctx.font='bold 20px monospace';
+  ctx.fillText('RALLY '+game.level, WIDTH-14, 12);
+  ctx.font='bold 14px monospace';
+  ctx.fillStyle='#8fd3ff';
+  ctx.fillText(Math.round(player.speed/MAX_SPEED*220)+' MPH', WIDTH-14, 36);
+  ctx.textAlign='left';
+
+  // multiplier
+  ctx.textAlign='center';
+  ctx.font='bold 26px monospace';
+  ctx.fillStyle = game.multiplier>=10 ? '#ff3f3f' : '#ffe14b';
+  ctx.fillText('x'+game.multiplier, WIDTH/2, 8);
+  ctx.textAlign='left';
+
+  // fuel bar
+  const bw = 240, bh = 18, bx = WIDTH/2-bw/2, by = HEIGHT-30;
+  const low = game.fuel < 20;
+  const flash = low && Math.floor(performance.now()/250)%2===0;
+  ctx.strokeStyle = '#fff'; ctx.lineWidth=2;
+  ctx.strokeRect(bx,by,bw,bh);
+  ctx.fillStyle = flash ? '#ff3030' : (low? '#ff8a30' : '#3fd05a');
+  ctx.fillRect(bx+2, by+2, (bw-4)*clamp(game.fuel/game.maxFuel,0,1), bh-4);
+  ctx.fillStyle = '#fff';
+  ctx.font='bold 11px monospace';
+  ctx.textAlign='center';
+  ctx.fillText('FUEL', WIDTH/2, by-14);
+  ctx.textAlign='left';
+
+  // weapon / ammo
+  ctx.font='bold 13px monospace';
+  if (game.weapon==='CANNON'){
+    ctx.fillStyle='#ffd23f';
+    ctx.fillText('U.Z. CANNON  AMMO:'+game.ammo, 14, HEIGHT-26);
+  } else if (game.weapon==='NITRO'){
+    ctx.fillStyle='#3fd0ff';
+    ctx.fillText('NITRO BOOST!', 14, HEIGHT-26);
+  } else if (game.ammo>0){
+    ctx.fillStyle='#aaffaa';
+    ctx.fillText('SPECIAL READY ['+game.podKind+']  (SHIFT/X)', 14, HEIGHT-26);
+  }
+  ctx.restore();
+}
+
+/* =========================================================
+   SECTION: TITLE / OVERLAY SCREENS
+   ========================================================= */
+function panel(x,y,w,h){
+  ctx.fillStyle = 'rgba(5,5,15,0.72)';
+  ctx.fillRect(x,y,w,h);
+  ctx.strokeStyle = '#ff7a3d';
+  ctx.lineWidth=2;
+  ctx.strokeRect(x,y,w,h);
+}
+
+function renderTitle(){
+  const t = performance.now()/1000;
+  ctx.textAlign='center';
+  ctx.fillStyle = '#ff3b3b';
+  ctx.font = 'bold 64px monospace';
+  ctx.save();
+  ctx.translate(WIDTH/2, 150);
+  ctx.fillStyle = '#ff5b1e';
+  ctx.fillText('ROADBLASTERS', 3, 3);
+  ctx.fillStyle = '#ffe14b';
+  ctx.fillText('ROADBLASTERS', 0, 0);
+  ctx.restore();
+
+  ctx.font='bold 16px monospace';
+  ctx.fillStyle = (Math.floor(t*2)%2===0) ? '#fff' : '#ff7a3d';
+  ctx.fillText('PRESS ENTER TO START', WIDTH/2, 230);
+
+  panel(WIDTH/2-250, 262, 500, 210);
+  ctx.font='13px monospace';
+  ctx.fillStyle='#eee';
+  const lines = [
+    'ARROWS / WASD  -  STEER & THROTTLE',
+    'SPACE          -  FIRE FRONT GUN',
+    'SHIFT / X      -  ACTIVATE SPECIAL WEAPON',
+    '',
+    'Collect GREEN & RED fuel globes to survive.',
+    'Chain kills to build your SCORE MULTIPLIER.',
+    'Reach the checkered FINISH before you run dry.',
+  ];
+  lines.forEach((l,i)=> ctx.fillText(l, WIDTH/2, 290 + i*22));
+
+  ctx.font='bold 14px monospace';
+  ctx.fillStyle='#ffd23f';
+  ctx.fillText('HIGH SCORE: '+game.highScore, WIDTH/2, 448);
+
+  // demo car
+  drawCarSprite(WIDTH/2 - 120, 520, 90, 'stinger', Math.sin(t*2)*0.4);
+  drawCarSprite(WIDTH/2 + 120, 520, 90, 'ratjeep', Math.sin(t*2+1)*0.4);
+  drawPlayerCarAt(WIDTH/2, 540);
+  ctx.textAlign='left';
+}
+function drawPlayerCarAt(cx,cy){
+  const save = {x:player.x, lean:player.lean};
+  const cx0 = WIDTH/2 + player.x*40;
+  ctx.save();
+  ctx.translate(cx - (WIDTH/2), 0);
+  drawPlayerCar();
+  ctx.restore();
+}
+
+function renderLevelComplete(){
+  panel(WIDTH/2-220, HEIGHT/2-90, 440, 180);
+  ctx.textAlign='center';
+  ctx.fillStyle='#ffe14b';
+  ctx.font='bold 30px monospace';
+  ctx.fillText('RALLY '+game.level+' COMPLETE', WIDTH/2, HEIGHT/2-60);
+  ctx.font='bold 16px monospace';
+  ctx.fillStyle='#fff';
+  ctx.fillText('BONUS +'+(500+game.level*100)+'   FUEL +40', WIDTH/2, HEIGHT/2-20);
+  ctx.font='14px monospace';
+  ctx.fillStyle = Math.floor(performance.now()/300)%2===0?'#fff':'#ff7a3d';
+  ctx.fillText('PRESS ENTER FOR RALLY '+(game.level+1), WIDTH/2, HEIGHT/2+30);
+  ctx.textAlign='left';
+}
+
+function renderGameOver(){
+  panel(WIDTH/2-240, HEIGHT/2-110, 480, 220);
+  ctx.textAlign='center';
+  ctx.fillStyle='#ff3b3b';
+  ctx.font='bold 34px monospace';
+  ctx.fillText(game.fuel<=0 ? 'OUT OF FUEL' : 'GAME OVER', WIDTH/2, HEIGHT/2-80);
+  ctx.font='bold 18px monospace';
+  ctx.fillStyle='#fff';
+  ctx.fillText('FINAL SCORE: '+game.score, WIDTH/2, HEIGHT/2-30);
+  ctx.fillStyle='#ffd23f';
+  ctx.fillText('HIGH SCORE: '+game.highScore, WIDTH/2, HEIGHT/2);
+  ctx.font='14px monospace';
+  ctx.fillStyle = Math.floor(performance.now()/300)%2===0?'#fff':'#ff7a3d';
+  ctx.fillText('PRESS ENTER TO CONTINUE', WIDTH/2, HEIGHT/2+50);
+  ctx.textAlign='left';
+}
+
+/* =========================================================
+   SECTION: MAIN LOOP
+   ========================================================= */
+let lastTime = performance.now();
+let rafFired = false, fallbackMode = false;
+function loop(now){
+  rafFired = true;
+  const dt = Math.min(0.05,(now-lastTime)/1000);
+  lastTime = now;
+  try{
+    update(dt);
+    render();
+  }catch(err){
+    console.error(err);
+  }
+  if (!fallbackMode) requestAnimationFrame(loop);
+}
+
+buildTrack(1);
+resetEntities();
+requestAnimationFrame(loop);
+// watchdog: if rAF is throttled/never fires (hidden or embedded views), drive the loop with a timer
+setTimeout(()=>{
+  if (!rafFired){
+    fallbackMode = true;
+    setInterval(()=>loop(performance.now()), 16);
+  }
+}, 800);
+
+})();
+</script>
+</body>
+</html>

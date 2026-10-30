@@ -29,7 +29,7 @@ function appKey(url) {
   const base = new URL('./', self.registration.scope).pathname, p = url.pathname;
   if (url.origin !== location.origin || !p.startsWith(base)) return null;
   const rel = p.slice(base.length);
-  if (rel === PAGE || rel === PAGE + '.html' || rel === '') return PAGE;
+  if (rel === PAGE || rel === PAGE + '.html') return PAGE;
   return rel.startsWith('golf/') || rel === 'golf.webmanifest' ? rel : null;
 }
 self.addEventListener('fetch', e => {

@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#fb923c"/>
+      <stop offset="100%" stop-color="#ea580c"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="96" fill="url(#bg)"/>
+  <g transform="translate(256,232)" text-anchor="middle">
+    <text font-size="220" y="60">🚗</text>
+  </g>
+  <text x="256" y="420" font-size="46" font-weight="900" text-anchor="middle" fill="white"
+        font-family="Arial Black, Helvetica, sans-serif" letter-spacing="2">SHOWDOWN</text>
+</svg>
