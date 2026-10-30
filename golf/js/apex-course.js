@@ -107,7 +107,7 @@ const APEX_HOLES = [
     fairways: [[190, 300, 18], [378, 440, 14]], ponds: [[340, -8, 30, 26]], bunkers: [[452, 18, 7, 5]] },
 
   { n: 18, name: 'Apex', par: 5, elev: { roll: 2, climb: 12, greenRise: 6 }, yards: { jaguar: 690, temple: 560, canopy: 480 },
-    note: 'The climb to the great pyramid. A ravine crosses at 440 — lay up or carry it — then up to a broad summit green with a false front.',
+    note: 'The climb to the great pyramid. A ravine crosses at 440 — lay up or carry it — then up to a broad summit green with a false front. They say the pyramid returns what is offered to it.',
     segments: [[290, 0], [220, 8], [180, -4]],
     fairways: [[210, 438], [472, 678, 21]], ravines: [[440, 470]], green: [19, 16], falseFront: { depth: 6, back: 10 },
     ruins: [[642, -40, 16, 26], [642, 40, 16, 26]], bunkers: [[600, 20, 8, 6]] },

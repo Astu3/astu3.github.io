@@ -1,28 +1,34 @@
 // Golf Improvement App — service worker: makes the app installable and lets it run with no connection.
-// Every app file is fetched fresh when the network answers quickly (so changes show up at once)
-// and a copy is kept; with no network, or a slow one (on the course), the copy is used.
-// The file list is read from the page itself, so new scripts are picked up without editing this.
-const CACHE = 'golf-app-v1';
+// Each version of the app is cached whole, under a name stamped from the files' contents
+// (tools/stamp-sw.js), and the app runs from that cache — so it never mixes files from
+// two versions. A new version downloads in the background, then waits: the app offers
+// "Update" and it takes over on reload. On localhost (development) files come from the
+// network first, so edits show up at once.
+const VERSION = 'cf7a27e231db';
+const CACHE = 'golf-app-' + VERSION;
 const PAGE = 'golf-improvement-app';
 const EXTRA = ['golf.webmanifest', 'golf/icons/icon-192.png', 'golf/icons/icon-512.png', 'golf/icons/maskable-512.png',
   'golf/vendor/three/three.min.js', 'golf/vendor/three/shaders/CopyShader.js', 'golf/vendor/three/shaders/LuminosityHighPassShader.js',
   'golf/vendor/three/postprocessing/EffectComposer.js', 'golf/vendor/three/postprocessing/RenderPass.js',
   'golf/vendor/three/postprocessing/ShaderPass.js', 'golf/vendor/three/postprocessing/UnrealBloomPass.js'];
-const NETWORK_WAIT_MS = 2500;
+const DEV = ['localhost', '127.0.0.1'].includes(location.hostname);
 
 self.addEventListener('install', e => e.waitUntil((async () => {
   const cache = await caches.open(CACHE);
   const res = await fetch(PAGE, { cache: 'no-cache' });
+  if (!res.ok) throw new Error('page fetch failed');
   const html = await res.clone().text();
-  await cache.put(PAGE, res);
   const files = [...html.matchAll(/(?:src|href)="(golf\/[^"]+)"/g)].map(m => m[1]);
   await cache.addAll([...new Set([...files, ...EXTRA])].map(f => new Request(f, { cache: 'no-cache' })));
-  self.skipWaiting();
+  await cache.put(PAGE, res);
+  // the first worker (golf-app-v1) had no update prompt, so replace it straight away
+  if (DEV || await caches.has('golf-app-v1')) self.skipWaiting();
 })()));
 self.addEventListener('activate', e => e.waitUntil((async () => {
-  for (const k of await caches.keys()) if (k !== CACHE) await caches.delete(k);
+  for (const k of await caches.keys()) if (k.startsWith('golf-app-') && k !== CACHE) await caches.delete(k);
   await self.clients.claim();
 })()));
+self.addEventListener('message', e => { if (e.data === 'skip-waiting') self.skipWaiting(); });
 
 // Only the app's own files; anything else on this site is left alone
 function appKey(url) {
@@ -38,10 +44,14 @@ self.addEventListener('fetch', e => {
   if (!key) return;
   e.respondWith((async () => {
     const cache = await caches.open(CACHE);
-    const net = fetch(key, { cache: 'no-cache' }).then(r => { if (r.ok && !r.redirected) cache.put(key, r.clone()); return r; });
+    if (DEV) { // development: newest first, the copy if offline
+      try { const r = await fetch(key, { cache: 'no-cache' }); if (r.ok && !r.redirected) cache.put(key, r.clone()); return r; }
+      catch (err) { const c = await cache.match(key); if (c) return c; throw err; }
+    }
     const cached = await cache.match(key);
-    if (!cached) return net;
-    const timeout = new Promise(res => setTimeout(() => res(cached), NETWORK_WAIT_MS));
-    return Promise.race([net.catch(() => cached), timeout]);
+    if (cached) return cached;
+    const r = await fetch(key); // not in this version's set (shouldn't happen): fetch and keep it
+    if (r.ok && !r.redirected) cache.put(key, r.clone());
+    return r;
   })());
 });

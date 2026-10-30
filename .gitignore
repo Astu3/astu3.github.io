@@ -13,3 +13,4 @@
 !/.claude/
 /.claude/*
 !/.claude/launch.json
+!/tools/

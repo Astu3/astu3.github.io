@@ -161,6 +161,7 @@ function saveData(key, value) {
     catch (e2) { showToast('⚠️ Storage is full — export a backup (Dashboard › Backup) and clear old range data'); console.error(e2); return false; }
   }
   dataChanged();
+  if (typeof syncSoon === 'function') syncSoon(); // other devices hear about it shortly
   return true;
 }
 // Free space by trimming the bulkiest history; returns true if anything was trimmed

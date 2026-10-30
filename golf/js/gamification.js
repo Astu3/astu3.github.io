@@ -109,10 +109,25 @@ const BADGE_DEFS = [
   { id: 'apex_explorer', emoji:'🗿', name:'Jungle Explorer',    rarity:'common',    desc:'Finish a round at Apex' },
   { id: 'apex_relics',   emoji:'🏺', name:'Relic Hunter',       rarity:'epic',      desc:'Earn a medal in every Apex challenge' },
   { id: 'apex_ace',      emoji:'🐆', name:'Jaguar Ace',         rarity:'legendary', desc:'Make a hole-in-one at Apex' },
+  // Apex secrets: shown as ??? until found
+  { id: 'apex_monkey',   emoji:'🐒', name:'Monkey Business',    rarity:'rare',      desc:'A monkey threw your ball out of the jungle', secret: true },
+  { id: 'apex_pin',      emoji:'🚩', name:'Pin Seeker',         rarity:'epic',      desc:'Hit the flagstick', secret: true },
+  { id: 'apex_offering', emoji:'🗿', name:'Temple Offering',    rarity:'epic',      desc:'The great temple returned your ball', secret: true },
+  { id: 'apex_eclipse',  emoji:'🌑', name:'Totality',           rarity:'epic',      desc:'Birdie Eclipse and watch the sun go dark', secret: true },
+  { id: 'apex_moon',     emoji:'🌙', name:'One Small Step',     rarity:'rare',      desc:'Found the moon code', secret: true },
   // Legendary
   { id: 'fifty_rounds',  emoji:'👑', name:'Dedicated',          rarity:'legendary', desc:'Log 50 rounds' },
   { id: 'tier_10',       emoji:'🌟', name:'Tour Pro',           rarity:'legendary', desc:'Reach Tour Pro tier' },
 ];
+
+// Secrets are awarded the moment they happen, not by checkBadges
+function awardSecretBadge(id) {
+  const earned = getBadgeState();
+  if (earned.includes(id)) return;
+  saveBadgeState([...earned, id]);
+  const def = BADGE_DEFS.find(b => b.id === id);
+  if (def) setTimeout(() => celebrate(`${def.emoji} Secret found: ${def.name}!`), 1600);
+}
 
 function checkBadges(rounds) {
   const earned = new Set(getBadgeState());
@@ -214,6 +229,8 @@ function renderBadges() {
       <div class="badge-grid">
         ${group.map(b => {
           const isEarned = earned.has(b.id), label = b.rarity.charAt(0).toUpperCase() + b.rarity.slice(1);
+          if (b.secret && !isEarned) return `<div class="badge-item" title="A secret of the jungle">
+            <div class="badge-emoji">❔</div><div class="badge-name">???</div><div class="badge-desc">A secret of the jungle</div><div class="badge-rarity">Secret</div></div>`;
           return `<div class="badge-item ${isEarned ? 'earned ' + b.rarity : ''}" title="${b.desc}">
             <div class="badge-emoji">${b.emoji}</div>
             <div class="badge-name">${b.name}</div>

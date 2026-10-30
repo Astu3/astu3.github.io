@@ -35,6 +35,7 @@ const bfWindAt = z => Math.log(Math.max(0.5, z) / BF_WIND_Z0) / Math.log(10 / BF
 
 // shot: { ballMph, launch (°), direction (°, + right), spin (rpm), spinAxis (°, + curves right) }
 // env.wind (optional): { x, y } mph at 10 m — the way the air moves, x = toward the target, y = rightward
+// env.gravity (optional): m/s², default 9.81
 // env.ground (optional): (x, y yards) → ground height in feet relative to the launch point,
 // so the ball lands on sloping ground (uphill shots land sooner, downhill later)
 // Returns flight data in yards/feet, plus the sampled path for drawing and
@@ -56,6 +57,7 @@ function simulateFlight(shot, env = {}, coef = BF_COEF) {
   [ax, ay] = [ax * Math.cos(dir) - ay * Math.sin(dir), ax * Math.sin(dir) + ay * Math.cos(dir)];
   const omega0 = (shot.spin || 0) * 2 * Math.PI / 60;
 
+  const grav = env.gravity || 9.81;
   const wx = ((env.wind && env.wind.x) || 0) * MPH_TO_MS, wy = ((env.wind && env.wind.y) || 0) * MPH_TO_MS, windy = wx || wy;
   const dt = 0.008, path = [{ x: 0, y: 0, z: 0, t: 0 }]; // 0.008 s: within 0.35 yds of a 0.004 s step at half the cost
   let apex = 0, steps = 0, spinLeft = 1;
@@ -76,7 +78,7 @@ function simulateFlight(shot, env = {}, coef = BF_COEF) {
     lx /= ln; ly /= ln; lz /= ln;
     const accX = -k * cd * v * rx + k * cl * v * v * lx;
     const accY = -k * cd * v * ry + k * cl * v * v * ly;
-    const accZ = -k * cd * v * rz + k * cl * v * v * lz - 9.81;
+    const accZ = -k * cd * v * rz + k * cl * v * v * lz - grav;
     vx += accX * dt; vy += accY * dt; vz += accZ * dt;
     const nz = z + vz * dt;
     // (env.groundMax, ft: the highest ground there is, so the lookup is skipped while the ball is above it)
@@ -192,7 +194,7 @@ function bfBounce(flight, surface = 'fairway', env = {}) {
     // a short, slow ballistic hop (drag and lift don't matter here)
     let z = gAt(x, y), n = 0;
     do {
-      x += v[0] * 0.01; y += v[1] * 0.01; z += v[2] * 0.01; v[2] -= BF_G * 0.01; t += 0.01;
+      x += v[0] * 0.01; y += v[1] * 0.01; z += v[2] * 0.01; v[2] -= (env.gravity || BF_G) * 0.01; t += 0.01;
       if (++n % 3 === 0) hops.push({ x: x * M_TO_YD, y: y * M_TO_YD, z: z * M_TO_FT, t });
     } while (z > gAt(x, y) && n < 600);
     hops.push({ x: x * M_TO_YD, y: y * M_TO_YD, z: gAt(x, y) * M_TO_FT, t });

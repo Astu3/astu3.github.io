@@ -114,7 +114,8 @@ function ap3BuildHole(h) {
   ap3AddSkyDome(scene, o, haze);
 
   // Light: soft sky fill plus a warm sun from the upper left of the map
-  scene.add(new T.HemisphereLight(0xdcecff, 0x34421f, 0.8));
+  o.hemi = new T.HemisphereLight(0xdcecff, 0x34421f, 0.8);
+  scene.add(o.hemi);
   const sun = new T.DirectionalLight(0xffe9c4, 1.25);
   sun.castShadow = true;
   sun.shadow.mapSize.set(AP3_LOOK.lite ? 1024 : 2048, AP3_LOOK.lite ? 1024 : 2048);
@@ -710,6 +711,9 @@ function ap3Frame(t, dt) {
   ap3NatureFrame(h, o); // grass around the ball
   const wind = (apex && apex.wind) || null;
   ap3WaveFlag(o.flag, t, wind ? wind.mph : 0);
+  // an eclipse (the 12th's secret): light fades to near night and back
+  const ek = ap3.eclipseAt ? Math.max(0, Math.sin(Math.min(1, (t - ap3.eclipseAt) / 9000) * Math.PI)) : 0;
+  o.sun.intensity = 1.25 * (1 - 0.92 * ek); o.hemi.intensity = 0.8 * (1 - 0.8 * ek);
   const focus = ap3G(ballPos, 0);
   o.sun.position.set(focus.x + AP3_POST.SUN[0] * 400, focus.y + AP3_POST.SUN[1] * 400, focus.z + AP3_POST.SUN[2] * 400); // where the sky's sun is
   if (o.sky) o.sky.position.copy(ap3.camera.position);

@@ -24,6 +24,7 @@ const APEX_WIND = {
   breezy: { name: 'Breezy', min: 2,  max: 12 },
   windy:  { name: 'Windy',  min: 10, max: 22 },
 };
+function apexCond() { return { wind: apex.wind, gravity: apex.moon ? 1.62 : 0 }; }
 function apexWindLevel() { return APEX_WIND[getPrefs().apexWind] ? getPrefs().apexWind : 'breezy'; }
 function apexMakeWind() {
   const w = APEX_WIND[apexWindLevel()];
@@ -81,7 +82,7 @@ function apexStartHole(start) {
 function apexAutoClub() {
   const profiles = {};
   APEX_CLUBS.forEach(c => { profiles[c] = apexProfile(c); });
-  const pl = ceSuggestShot(apexHole(), apex.ball, apex.lie, profiles, APEX_CLUBS, apex.wind);
+  const pl = ceSuggestShot(apexHole(), apex.ball, apex.lie, profiles, APEX_CLUBS, apexCond());
   if (!pl) return;
   apex.club = pl.club; apex.power = pl.power; apex.shotType = pl.type; apex.aimDeg = pl.aimDeg;
 }
@@ -94,7 +95,7 @@ function apexHit(launch, src) {
   if (!apex || apexAnim || apex.holeResult) return;
   const h = apexHole(), hs = apexHoleState();
   const startLie = apex.lie, startDist = ceDist(apex.ball, h.pin);
-  const res = ceResolveShot(h, apex.ball, apex.aimDeg, launch, startLie, apex.wind);
+  const res = apexSecrets(h, ceResolveShot(h, apex.ball, apex.aimDeg, launch, startLie, apexCond()));
   hs.shots.push({ lie: startLie, dist: Math.round(startDist), club: apex.club, penalty: res.penalty });
   hs.strokes += 1 + res.penalty;
   apex.lastShot = { club: apex.club, src, carry: res.carry, total: res.total, apexFt: res.flight.apexFt, events: res.events,
@@ -126,6 +127,62 @@ function apexHit(launch, src) {
 function apexSwingSimulated() {
   apexHit(ceSimulatedSwing(apexProfile(apex.club), apex.power, apex.shotType), 'sim');
 }
+
+// ── Secrets of the jungle ──────────────────────────────────────
+// A monkey sometimes throws a ball back out of the jungle; the great temples
+// behind the 9th and 18th greens return what's offered to them; the flagstick
+// is real (course-engine.js). Changes a resolved shot, for real swings only.
+function apexSecrets(h, res) {
+  if (apex.challenge) return res;
+  const thrown = (to, event) => ({ ...res, rest: to, surface: ceSurfaceAt(h, to), penalty: 0, replay: false, holed: false,
+                                   rollPath: [...res.rollPath, ...[0.25, 0.5, 0.75, 1].map(k => { const a = res.rollPath.length ? res.rollPath[res.rollPath.length - 1] : res.world[res.world.length - 1].p; return [a[0] + (to[0] - a[0]) * k, a[1] + (to[1] - a[1]) * k]; })],
+                                   events: [...res.events, event] });
+  if (res.events.some(e => /flagstick/.test(e))) awardSecretBadge('apex_pin');
+  // the temple: a ball flown long and straight, down the cleared sightline toward it (once a round)
+  if ((h.n === 9 || h.n === 18) && !apex.offered) {
+    const c = ceAt(h.path, h.length + (h.n === 18 ? 105 : 90));
+    const longStraight = p => { const s = ceProjectS(h.path, p); return s > h.length + 22 && ceDist(p, ceAt(h.path, s)) < 22; };
+    if (res.world.some(w => longStraight(w.p)) || longStraight(res.rest)) {
+      apex.offered = true;
+      const back = [c[0] - h.pin[0], c[1] - h.pin[1]], d = Math.hypot(...back) || 1;
+      let to = [h.pin[0] + back[0] / d * 5, h.pin[1] + back[1] / d * 5];
+      if (ceSurfaceAt(h, to) !== 'green') to = [h.pin[0] + back[0] / d * 1.5, h.pin[1] + back[1] / d * 1.5];
+      awardSecretBadge('apex_offering');
+      return thrown(to, '🗿 The temple accepted your offering… and returned your ball to the green');
+    }
+  }
+  // the monkey
+  if (res.surface === 'jungle' && !res.penalty && Math.random() < 0.05) {
+    const s = ceProjectS(h.path, res.rest), c = ceAt(h.path, s), d = ceDist(c, res.rest) || 1;
+    let to = [c[0] + (res.rest[0] - c[0]) / d * 22, c[1] + (res.rest[1] - c[1]) / d * 22];
+    if (!['rough', 'fairway'].includes(ceSurfaceAt(h, to))) to = c;
+    awardSecretBadge('apex_monkey');
+    return thrown(to, '🐒 A monkey threw your ball back out!');
+  }
+  return res;
+}
+
+// Moon gravity: ↑ ↑ ↓ ↓ ← → ← → B A on the Apex page, or tap the hole name 7 times
+const APEX_KONAMI = ['ArrowUp', 'ArrowUp', 'ArrowDown', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'ArrowLeft', 'ArrowRight', 'b', 'a'];
+let apexKonamiAt = 0, apexTaps = [];
+function apexToggleMoon() {
+  if (!apex || apex.challenge || apexAnim) return;
+  apex.moon = !apex.moon;
+  showToast(apex.moon ? '🌙 Moon gravity! Fun only — this round won\'t be saved' : '🌍 Back to Earth');
+  if (apex.moon) awardSecretBadge('apex_moon');
+  apexAutoClub(); apexSave(); renderApex();
+}
+function apexTitleTap() {
+  const now = Date.now();
+  apexTaps = apexTaps.filter(t => now - t < 2500).concat(now);
+  if (apexTaps.length >= 7) { apexTaps = []; apexToggleMoon(); }
+}
+document.addEventListener('keydown', e => {
+  if (!document.getElementById('page-apex').classList.contains('active') || /INPUT|SELECT|TEXTAREA/.test(e.target.tagName)) return;
+  const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+  apexKonamiAt = k === APEX_KONAMI[apexKonamiAt] ? apexKonamiAt + 1 : (k === APEX_KONAMI[0] ? 1 : 0);
+  if (apexKonamiAt === APEX_KONAMI.length) { apexKonamiAt = 0; apexToggleMoon(); }
+});
 
 // From the R10 (routed by r10-ui.js)
 function apexAwaitingShot() {
@@ -163,6 +220,13 @@ function apexFinishHole(how, chimeMs = 300) { // chimeMs: after any putts have d
   apex.holeResult = { name, how };
   onActivity('apex');
   if (!hs.pickedUp && d <= -1) apexSound('chime', chimeMs, { level: hs.strokes === 1 ? 3 : Math.min(3, -d) });
+  if (!apex.challenge && hs.strokes === 1) setTimeout(() => celebrate('🐆 HOLE IN ONE!'), chimeMs);
+  // Eclipse: a birdie on the 12th darkens the sky
+  if (!apex.challenge && !hs.pickedUp && h.n === 12 && d <= -1) {
+    ap3.eclipseAt = performance.now();
+    showToast('🌑 Totality — the sun goes dark over Eclipse');
+    awardSecretBadge('apex_eclipse');
+  }
   apexSave(); renderApex();
 }
 
@@ -173,6 +237,10 @@ function apexNextHole() {
 }
 
 function apexFinishRound() {
+  if (apex.moon) { // moon rounds are just for fun
+    showToast('🌙 Moon round finished — it isn\'t saved');
+    apexClear(); renderApex(); return;
+  }
   const t = APEX_TEES[apex.tee];
   const played = apex.holes.slice(apex.first, apex.last + 1);
   const round = {
@@ -215,7 +283,7 @@ function apexAnimDuration(res) { return apexFlightMs(res) + res.rollPath.length 
 // Predicted result of the current setup (no dispersion), cached until something changes
 let apexPreviewCache = { key: null, res: null };
 function apexPreview() {
-  const key = [apex.holeIdx, apex.ball, apex.aimDeg, apex.club, apex.power, apex.shotType, apex.lie, apex.wind && apex.wind.mph, apex.wind && apex.wind.toDeg].join('|');
+  const key = [apex.holeIdx, apex.ball, apex.aimDeg, apex.club, apex.power, apex.shotType, apex.lie, apex.wind && apex.wind.mph, apex.wind && apex.wind.toDeg, apex.moon].join('|');
   if (apexPreviewCache.key === key) return apexPreviewCache.res;
   apexPreviewCache = { key, res: apexPreviewUncached() };
   return apexPreviewCache.res;
@@ -224,7 +292,7 @@ function apexPreviewUncached() {
   const p = apexProfile(apex.club), t = CE_SHOT_TYPES[apex.shotType], pw = Math.max(0.1, apex.power / 100);
   return ceResolveShot(apexHole(), apex.ball, apex.aimDeg,
     { ballMph: p.ballMph * pw * t.speed, launch: p.launch * t.launch, spin: p.spin * (0.55 + 0.45 * pw) * t.spin, direction: 0, spinAxis: 0 },
-    apex.lie, apex.wind);
+    apex.lie, apexCond());
 }
 
 // Click or tap the map to aim
@@ -255,7 +323,7 @@ function renderApex() {
   el.innerHTML = `
     <div class="apex-top">
       <div>
-        <div class="apex-hole-title">Hole ${h.n} · ${esc(h.name)}</div>
+        <div class="apex-hole-title" onclick="apexTitleTap()">Hole ${h.n} · ${esc(h.name)}${apex.moon ? ' <span title="Moon gravity — this round won\'t be saved">🌙</span>' : ''}</div>
         <div class="apex-hole-meta">Par ${h.par} · ${h.yards[apex.tee]} yds · ${APEX_TEES[apex.tee].name} tees</div>
       </div>
       ${apex.challenge ? `<div style="text-align:right;">

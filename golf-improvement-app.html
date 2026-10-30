@@ -25,6 +25,7 @@
       </div>
     </div>
     <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+      <button id="sync-header-btn" class="sync-header-btn" onclick="syncNow(true)" style="display:none;" aria-label="Sync">☁️</button>
       <div class="xp-header" id="xp-header">
         <div class="xp-tier-badge" id="tier-badge">Rookie</div>
         <div class="xp-bar-wrap">
@@ -93,6 +94,8 @@
       <div class="card-title">Data &amp; Backup</div>
       <p style="font-size:0.82rem;color:var(--gray-mid);margin-bottom:12px;">Your data is stored only on this device. Keep backups so you never lose it — and use one to move your data to another device.</p>
       <div id="backup-status"></div>
+      <div class="card-title" style="margin-top:18px;">Sync between devices</div>
+      <div id="sync-status"></div>
       <input type="file" id="import-file" accept="application/json,.json" style="display:none;" onchange="importData(this)" />
     </div>
   </div>
@@ -305,6 +308,7 @@
 <script src="golf/js/history.js"></script>
 <script src="golf/js/practice.js"></script>
 <script src="golf/js/backup.js"></script>
+<script src="golf/js/sync.js"></script>
 <script src="golf/js/strokes-gained.js"></script>
 <script src="golf/js/ballflight.js"></script>
 <script src="golf/js/r10.js"></script>
