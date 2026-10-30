@@ -294,6 +294,7 @@ function renderCoach() {
       <div class="progress-bar-wrap" style="margin-bottom:10px;"><div class="progress-bar" style="width:${Math.round(done / steps.length * 100)}%"></div></div>
       ${steps.map(s => `<div class="coach-step ${s.done ? 'done' : ''}"><span class="coach-step-check">${s.done ? '✅' : '○'}</span><div style="flex:1;"><b>${s.name}</b><div class="apex-hole-meta">${s.desc}</div></div>${s.done ? '' : `<button class="btn btn-sm btn-primary" onclick="${s.js}">Start</button>`}</div>`).join('')}</div>` : ''}
     ${coachTestHTML()}
+    ${planCardHTML()}
     ${focus.length ? `<div class="card"><div class="card-title">What to work on</div>${focus.map(coachFocusHTML).join('')}</div>`
       : `<div class="card"><div class="card-title">What to work on</div><p style="font-size:0.86rem;color:var(--gray-mid);">${an.evidence.length ? 'Nothing is costing you strokes against your goal yet — set a tougher goal, or add more evidence.' : 'Complete any assessment step and your first priorities appear here.'}</p></div>`}
     ${an.ranked.length ? `<div class="card"><div class="card-title">Where your strokes go</div>
@@ -304,7 +305,7 @@ function renderCoach() {
       <div class="drill-opt"><label>Current handicap (or your best guess)</label><input type="number" step="0.1" min="-5" max="54" value="${isFinite(c.handicap) ? c.handicap : ''}" placeholder="${an.current ?? 'e.g. 18'}" onchange="coachSet('handicap', this.value === '' ? null : parseFloat(this.value))" style="max-width:120px;"></div>
       <div class="drill-opt"><label>Goal handicap — the coach measures you against this</label><input type="number" step="0.1" min="-5" max="54" value="${isFinite(c.goal) ? c.goal : ''}" placeholder="${an.goal}" onchange="coachSet('goal', this.value === '' ? null : parseFloat(this.value))" style="max-width:120px;"></div>
       <div class="drill-opt"><label>Where do you feel you lose the most shots?</label><div class="toggle-group">${Object.entries(COACH_AREAS).map(([k, A]) => `<button class="toggle-btn ${c.weak === k ? 'active' : ''}" onclick="coachSet('weak','${k}')">${A.name}</button>`).join('')}</div></div>
-      <div class="drill-opt"><label>Practice time per week</label><div class="toggle-group">${[1, 2, 4, 6].map(hrs => `<button class="toggle-btn ${c.hours === hrs ? 'active' : ''}" onclick="coachSet('hours', ${hrs})">${hrs === 6 ? '6+' : hrs} h</button>`).join('')}</div></div>
+      <div class="drill-opt"><label>Practice time per week (sizes your weekly plan)</label><div class="toggle-group">${[1, 2, 4, 6].map(hrs => `<button class="toggle-btn ${(c.hours || 2) === hrs ? 'active' : ''}" onclick="coachSet('hours', ${hrs}); planRebuild()">${hrs === 6 ? '6+' : hrs} h</button>`).join('')}</div></div>
     </div>`;
 }
 
@@ -315,5 +316,6 @@ function coachCardHTML() {
       <div class="card-title" style="margin:0;">🧭 What to work on</div><button class="btn btn-sm" style="background:var(--gray-light);color:var(--gray-dark);" onclick="navTo('coach')">Coach ›</button></div>
     ${focus.length ? focus.map((a, i) => `<div class="coach-mini"><span class="coach-rank">${i + 1}</span><span>${COACH_AREAS[a.area].icon} <b>${COACH_AREAS[a.area].name}</b></span><span class="coach-focus-loss">${a.sg.toFixed(1)}/rd</span><span class="coach-conf ${coachConfLabel(a.conf)}">${coachConfLabel(a.conf)}</span></div>`).join('')
       : `<p style="font-size:0.84rem;color:var(--gray-mid);">Take the ${done ? 'next' : 'first'} assessment step (${done}/${steps.length} done) and your coach will show where your strokes are going.</p>`}
+    ${planMiniHTML()}
   </div>`;
 }

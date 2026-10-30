@@ -105,6 +105,9 @@ const BADGE_DEFS = [
   { id: 'drill_10',      emoji:'🧰', name:'Range Rat',          rarity:'common',    desc:'Complete 10 drills with your R10' },
   { id: 'drill_comb80',  emoji:'🎯', name:'Sharpshooter',       rarity:'epic',      desc:'Score 80+ in a Combine' },
   { id: 'drill_fw80',    emoji:'🛣️', name:'Fairway Machine',    rarity:'epic',      desc:'Hit 80%+ fairways in a Fairway Finder' },
+  // Practice plan
+  { id: 'plan_week',     emoji:'📅', name:'Plan Follower',      rarity:'rare',      desc:'Finish every block of a weekly practice plan' },
+  { id: 'plan_4',        emoji:'🗓️', name:'Deliberate Practice', rarity:'epic',     desc:'Finish 4 weekly practice plans' },
   // Apex (the virtual course)
   { id: 'apex_explorer', emoji:'🗿', name:'Jungle Explorer',    rarity:'common',    desc:'Finish a round at Apex' },
   { id: 'apex_relics',   emoji:'🏺', name:'Relic Hunter',       rarity:'epic',      desc:'Earn a medal in every Apex challenge' },
@@ -181,6 +184,9 @@ function checkBadges(rounds) {
   if (Object.keys(dh).reduce((a, k) => a + real(k).length, 0) >= 10) award('drill_10');
   if (real('combine').some(h => h.avg >= 80)) award('drill_comb80');
   if (real('fairway').some(h => h.pct >= 80)) award('drill_fw80');
+  const planWeeks = typeof planWeeksCompleted === 'function' ? planWeeksCompleted() : 0;
+  if (planWeeks >= 1) award('plan_week');
+  if (planWeeks >= 4) award('plan_4');
   const apexRounds = getApexRounds(), chBest = getApexChallengeBest();
   if (apexRounds.length) award('apex_explorer');
   if (APEX_CHALLENGES.every(c => (chBest[c.id] || {}).made >= 2)) award('apex_relics');
@@ -203,7 +209,7 @@ function badgeCategory(b) {
   if (b.id.startsWith('apex_')) return 'Apex';
   if (b.id.startsWith('speed_')) return 'Speed';
   if (b.id.startsWith('drill_')) return 'Drills';
-  if (b.id.startsWith('streak_') || b.id.startsWith('active_')) return 'Consistency';
+  if (b.id.startsWith('streak_') || b.id.startsWith('active_') || b.id.startsWith('plan_')) return 'Consistency';
   if (b.id.startsWith('tier_') || b.id.startsWith('xp_')) return 'Progress';
   return 'Rounds';
 }

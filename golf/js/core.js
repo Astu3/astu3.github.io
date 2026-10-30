@@ -118,6 +118,7 @@ const KEYS = {
   speedProfile: 'golf_speed_profile_v1', // baseline tests and progress checks
   activity:    'golf_activity_v1',
   coach:       'golf_coach_v1',         // improvement coach: profile, goal, snapshots over time
+  plan:        'golf_plan_v1',           // this week's practice plan (and past weeks' results)
   coachTests:  'golf_coach_tests_v1',   // putting and short-game assessment tests      // practice days by type (for days with no other dated record)
   drills:      'golf_drills_v1',        // drill history, personal bests and last setups
   wedgeMatrix: 'golf_wedge_matrix_v1',  // wedge shots by club and swing length

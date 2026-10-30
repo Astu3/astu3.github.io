@@ -126,24 +126,20 @@ function rangeSectionHTML() {
   const clubs = Object.keys(byClub).sort((a, b) => SG_CLUBS.indexOf(a) - SG_CLUBS.indexOf(b));
   const averages = clubs.length ? `
     <div class="card">
-      <div class="card-title">Range Averages by Club · Yardage Gapping</div>
+      <div class="card-title">Launch Averages by Club · all range shots</div>
       <div class="scorecard-wrap"><table class="scorecard">
-        <thead><tr><th style="text-align:left;">Club</th><th>Shots</th><th>Carry</th><th>Total</th><th>Gap</th><th>Club ${unit}</th><th>Ball ${unit}</th><th>Smash</th><th>Launch</th><th>Spin</th><th>Attack</th></tr></thead>
-        <tbody>${clubs.map((c, i) => { const s = byClub[c];
-          // Gap = carry difference to the next shorter club in the bag
-          const carry = rangeAvg(s, 'carry'), nextCarry = clubs[i + 1] ? rangeAvg(byClub[clubs[i + 1]], 'carry') : null;
-          const gap = carry !== null && nextCarry !== null ? Math.round(carry - nextCarry) : null;
+        <thead><tr><th style="text-align:left;">Club</th><th>Shots</th><th>Carry</th><th>Total</th><th>Club ${unit}</th><th>Ball ${unit}</th><th>Smash</th><th>Launch</th><th>Spin</th><th>Attack</th></tr></thead>
+        <tbody>${clubs.map(c => { const s = byClub[c], carry = rangeAvg(s, 'carry');
           return `<tr>
           <td style="text-align:left;font-weight:700;">${esc(c)}</td><td>${s.length}</td>
           <td style="font-weight:700;">${fmtYds(carry)}</td><td>${fmtYds(rangeAvg(s, 'total'))}</td>
-          <td${gap !== null && (gap < 7 || gap > 20) ? ' style="color:var(--red);font-weight:700;" title="Uneven gap"' : ''}>${gap === null ? '—' : gap}</td>
           <td>${fmtSpd(rangeAvg(s, 'clubMph'))}</td><td>${fmtSpd(rangeAvg(s, 'ballMph'))}</td>
           <td>${fmtSmash(rangeAvg(s, 'smash'))}</td><td>${fmtDeg(rangeAvg(s, 'launch'))}</td>
           <td>${fmtSpin(rangeAvg(s, 'spin'))}</td><td>${fmtDeg(rangeAvg(s, 'attack'))}</td>
         </tr>`; }).join('')}</tbody>
       </table></div>
       <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;font-size:0.76rem;color:var(--gray-mid);">
-        <span>Distances are estimated from launch data (fairway, sea level). Gaps under 7 or over 20 yds are flagged. Ball-flight numbers need a real ball.</span>
+        <span>Every saved shot, mishits included (My Bag above uses recent clean strikes). Ball-flight numbers need a real ball.</span>
         <button class="btn btn-sm" style="background:none;color:var(--gray-mid);padding:2px 6px;" onclick="rangeClearAll()">Clear range data</button>
       </div>
     </div>` : '';
@@ -163,6 +159,7 @@ function rangeSectionHTML() {
       ${lastHTML}
       ${sessionTable}
     </div>
+    ${bagSectionHTML()}
     ${averages}
   `;
 }

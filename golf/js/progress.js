@@ -61,6 +61,7 @@ function weeklyProgress() {
 
 // ── After any activity: daily tasks, the weekly bonus, badges and quests ──
 function onActivity(type, detail = {}) {
+  if (typeof planCurrent === 'function') setTimeout(() => planReward(planCurrent()), 600); // a drill, session or test may finish a plan block
   const log = loadData(KEYS.activity, {}), today = todayISO();
   // (range days come from the shots themselves: five or more make a session)
   if (type !== 'range' && !(log[today] || []).includes(type)) { log[today] = [...(log[today] || []), type]; saveData(KEYS.activity, log); }

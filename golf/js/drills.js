@@ -65,7 +65,7 @@ const drillFmtMiss = m => `${Math.round(m.miss)} yds — ${Math.abs(m.long) < 1 
 function drillClubCarry(club) {
   const mine = getRangeShots().filter(s => s.club === club && s.carry);
   if (mine.length >= 3) return mine.reduce((a, s) => a + s.carry, 0) / mine.length;
-  return ceClubDistance(ceClubProfile(club, getRangeShots())).carry;
+  return ceClubDistance(ceClubProfile(club, bagProfileShots())).carry;
 }
 function drillSuggestClub(dist) {
   const clubs = RANGE_CLUBS.filter(c => c !== 'Driver');
@@ -239,7 +239,7 @@ const DRILLS = {
       { key: 'club', label: 'Club', type: 'club', def: '7-Iron' },
       { key: 'hand', label: 'You swing', type: 'choice', choices: [['right', 'Right-handed'], ['left', 'Left-handed']], def: 'right' },
     ],
-    start: o => ({ done: Array(9).fill(false), tries: Array(9).fill(0), cell: 4, i: 0, max: 36, base: ceClubProfile(o.club, getRangeShots()).launch, results: [] }),
+    start: o => ({ done: Array(9).fill(false), tries: Array(9).fill(0), cell: 4, i: 0, max: 36, base: ceClubProfile(o.club, bagProfileShots()).launch, results: [] }),
     now: (st, o) => ({ title: `${drillNineName(st.cell)} · shot ${st.i + 1} of ${st.max}`, sub: `Height from launch angle (your ${o.club} launches ~${Math.round(st.base)}°), shape from spin axis`, club: o.club, swing: 'full', lockClub: true, pickCell: true }),
     shot: (st, s, o) => {
       const want = drillNineCell(st.cell), got = drillNineRead(s, st.base, o.hand), ok = want.h === got.h && want.s === got.s;
@@ -328,7 +328,7 @@ function drillOnR10Shot(shot) {
 // Without an R10: a test shot from your club numbers, aimed at the current target
 function drillTestShot() {
   const [st, o, P] = drillCtx(), now = drillDef().now(st, o, P), club = drillCurrentClub(now);
-  const prof = ceClubProfile(club, getRangeShots());
+  const prof = ceClubProfile(club, bagProfileShots());
   let power = DRILL_SWINGS[now.swing || 'full']?.power ?? 100, type = 'normal';
   if (now.dist) { // aim the distance like a player would
     const full = ceClubDistance(prof).carry;

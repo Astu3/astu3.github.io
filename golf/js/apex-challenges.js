@@ -83,7 +83,7 @@ function apexFinishChallenge() {
   const made = rs.filter(r => r.ok).length, closest = Math.min(...rs.filter(r => r.ft !== null).map(r => r.ft));
   const medal = apexChMedal(made);
   const all = getApexChallengeBest(), prev = all[c.id] || { made: 0, closest: null, plays: 0, medals: [] };
-  const rec = { made: Math.max(prev.made, made), plays: prev.plays + 1, medals: prev.medals || [],
+  const rec = { made: Math.max(prev.made, made), plays: prev.plays + 1, medals: prev.medals || [], lastPlayed: todayISO(),
                 closest: isFinite(closest) ? Math.min(prev.closest ?? Infinity, closest) : prev.closest };
   // XP once per medal level reached (bronze, silver, gold)
   let xp = 0;

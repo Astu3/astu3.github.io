@@ -47,7 +47,7 @@ function apexLoad()        { apex = loadData(KEYS.apexDraft, null); }
 function apexClear()       { apex = null; store.removeItem(uk(KEYS.apexDraft)); }
 
 function apexHole()    { return apexCourse().holes[apex.holeIdx]; }
-function apexProfile(club) { return ceClubProfile(club, getRangeShots()); }
+function apexProfile(club) { return ceClubProfile(club, bagProfileShots()); } // clean recent strikes (bag.js)
 function apexCal()     { const t = APEX_TEES[apex.tee]; return sgCalibration(apex.target, t.rating, 18); }
 function apexHoleState() { return apex.holes[apex.holeIdx]; }
 
