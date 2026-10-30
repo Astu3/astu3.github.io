@@ -1018,9 +1018,3 @@ input:focus, select:focus { outline: none; border-color: var(--green-light); }
 /* New version available */
 .update-bar { position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%); z-index: 1000; display: flex; align-items: center; gap: 12px;
   background: var(--green-dark); color: white; padding: 10px 16px; border-radius: 14px; box-shadow: 0 6px 24px rgba(0,0,0,0.3); font-weight: 700; font-size: 0.9rem; max-width: calc(100vw - 32px); }
-
-/* Sync */
-.sync-header-btn { background: rgba(255,255,255,0.14); border: none; border-radius: 50%; width: 36px; height: 36px; font-size: 1.1rem; cursor: pointer; position: relative; }
-.sync-header-btn.busy { animation: sync-pulse 1s ease-in-out infinite; }
-.sync-header-btn.needs::after { content: ''; position: absolute; top: 4px; right: 4px; width: 8px; height: 8px; border-radius: 50%; background: var(--gold); }
-@keyframes sync-pulse { 50% { opacity: 0.4; } }

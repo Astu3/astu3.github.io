@@ -16,7 +16,6 @@ storeReady.then(() => {
   sgLoadDraft(); // resume an SG round that was in progress
   apexLoad();    // and an Apex round
   backupAuto();  // daily folder backup / weekly reminder
-  syncAuto();    // Google Drive sync, if it's on
 });
 
 // Installable, offline app: the service worker keeps a complete copy of each version.
