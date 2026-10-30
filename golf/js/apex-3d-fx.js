@@ -151,13 +151,16 @@ function ap3FlagGeometry() {
   g.userData.base = Float32Array.from(g.attributes.position.array);
   return g;
 }
-function ap3WaveFlag(flag, t) {
+// mph: wind speed — a calm flag hangs down the pole, a strong one streams out flat and snaps
+function ap3WaveFlag(flag, t, mph = 8) {
   const p = flag.geometry.attributes.position, base = flag.geometry.userData.base;
   if (!base) return;
+  const s = Math.min(1, mph / 18), droop = 0.55 * (1 - s) ** 2, flap = 0.03 + 0.1 * s, rate = 0.004 + 0.008 * s;
   for (let i = 0; i < p.count; i++) {
     const x = base[i * 3], y = base[i * 3 + 1], k = x / 1.1; // 0 at the pole, 1 at the free edge
-    p.setZ(i, Math.sin(x * 6 - t * 0.008 + y * 1.5) * 0.11 * k);
-    p.setY(i, y + Math.sin(x * 4 - t * 0.006) * 0.025 * k - 0.04 * k * k);
+    p.setZ(i, Math.sin(x * 6 - t * rate * 1.3 + y * 1.5) * flap * k);
+    p.setX(i, x * (1 - droop * 0.6 * k));
+    p.setY(i, y + Math.sin(x * 4 - t * rate) * 0.025 * k - (0.04 + droop) * k * k);
   }
   p.needsUpdate = true; flag.geometry.computeVertexNormals();
 }

@@ -18,6 +18,27 @@ const APEX_MAX_STROKES = 10; // pick up at this score on any hole
 
 const APEX_CLUBS = Object.keys(CE_DEFAULT_CLUBS).filter(c => !['2-Iron', '3-Iron'].includes(c));
 
+// Wind: each hole gets its own (speed at flag height, 10 m); challenges are always calm
+const APEX_WIND = {
+  calm:   { name: 'Calm',   min: 0,  max: 0 },
+  breezy: { name: 'Breezy', min: 2,  max: 12 },
+  windy:  { name: 'Windy',  min: 10, max: 22 },
+};
+function apexWindLevel() { return APEX_WIND[getPrefs().apexWind] ? getPrefs().apexWind : 'breezy'; }
+function apexMakeWind() {
+  const w = APEX_WIND[apexWindLevel()];
+  return w.max ? { mph: Math.round(w.min + (w.max - w.min) * Math.random()), toDeg: Math.round(Math.random() * 360) } : null;
+}
+// How the wind plays for the current aim: helping / into / across
+function apexWindText(wind, aimDeg) {
+  if (!wind || !wind.mph) return 'Calm';
+  const r = ceWindRel(wind, aimDeg), along = r.x / wind.mph, across = r.y / wind.mph;
+  const parts = [];
+  if (along > 0.38) parts.push('helping'); else if (along < -0.38) parts.push('into you');
+  if (Math.abs(across) > 0.38) parts.push(across > 0 ? 'left to right' : 'right to left');
+  return `${wind.mph} mph ${parts.join(', ')}`;
+}
+
 function getApexRounds()   { return loadData(KEYS.apexRounds, []); }
 function saveApexRounds(r) { saveData(KEYS.apexRounds, r); }
 function apexSave()        { if (apex) saveData(KEYS.apexDraft, apex); }
@@ -47,6 +68,7 @@ function apexStartHole(start) {
   apex.ball = start ? start.ball : h.tees[apex.tee];
   apex.lie = start ? start.lie : 'tee';
   apex.tracers = [];
+  apex.wind = apex.challenge ? null : apexMakeWind();
   apex.lastShot = null;
   apex.holeResult = null;
   apexLastRes = null;
@@ -59,7 +81,7 @@ function apexStartHole(start) {
 function apexAutoClub() {
   const profiles = {};
   APEX_CLUBS.forEach(c => { profiles[c] = apexProfile(c); });
-  const pl = ceSuggestShot(apexHole(), apex.ball, apex.lie, profiles, APEX_CLUBS);
+  const pl = ceSuggestShot(apexHole(), apex.ball, apex.lie, profiles, APEX_CLUBS, apex.wind);
   if (!pl) return;
   apex.club = pl.club; apex.power = pl.power; apex.shotType = pl.type; apex.aimDeg = pl.aimDeg;
 }
@@ -72,7 +94,7 @@ function apexHit(launch, src) {
   if (!apex || apexAnim || apex.holeResult) return;
   const h = apexHole(), hs = apexHoleState();
   const startLie = apex.lie, startDist = ceDist(apex.ball, h.pin);
-  const res = ceResolveShot(h, apex.ball, apex.aimDeg, launch, startLie);
+  const res = ceResolveShot(h, apex.ball, apex.aimDeg, launch, startLie, apex.wind);
   hs.shots.push({ lie: startLie, dist: Math.round(startDist), club: apex.club, penalty: res.penalty });
   hs.strokes += 1 + res.penalty;
   apex.lastShot = { club: apex.club, src, carry: res.carry, total: res.total, apexFt: res.flight.apexFt, events: res.events,
@@ -193,7 +215,7 @@ function apexAnimDuration(res) { return apexFlightMs(res) + res.rollPath.length 
 // Predicted result of the current setup (no dispersion), cached until something changes
 let apexPreviewCache = { key: null, res: null };
 function apexPreview() {
-  const key = [apex.holeIdx, apex.ball, apex.aimDeg, apex.club, apex.power, apex.shotType, apex.lie].join('|');
+  const key = [apex.holeIdx, apex.ball, apex.aimDeg, apex.club, apex.power, apex.shotType, apex.lie, apex.wind && apex.wind.mph, apex.wind && apex.wind.toDeg].join('|');
   if (apexPreviewCache.key === key) return apexPreviewCache.res;
   apexPreviewCache = { key, res: apexPreviewUncached() };
   return apexPreviewCache.res;
@@ -202,7 +224,7 @@ function apexPreviewUncached() {
   const p = apexProfile(apex.club), t = CE_SHOT_TYPES[apex.shotType], pw = Math.max(0.1, apex.power / 100);
   return ceResolveShot(apexHole(), apex.ball, apex.aimDeg,
     { ballMph: p.ballMph * pw * t.speed, launch: p.launch * t.launch, spin: p.spin * (0.55 + 0.45 * pw) * t.spin, direction: 0, spinAxis: 0 },
-    apex.lie);
+    apex.lie, apex.wind);
 }
 
 // Click or tap the map to aim
@@ -305,6 +327,7 @@ function apexRefreshInfo() {
     <div class="apex-stat"><span>Lie</span><strong>${lieName}</strong></div>
     ${(() => { const up = Math.round(ceElevation(h, h.pin) - ceElevation(h, apex.ball));
       return `<div class="apex-stat"><span>To green</span><strong>${up > 1 ? `▲ ${up} ft up` : up < -1 ? `▼ ${-up} ft down` : 'Level'}</strong></div>`; })()}
+    <div class="apex-stat"><span>Wind</span><strong>${apex.wind && apex.wind.mph ? `<span class="apex-wind-arrow" style="transform:rotate(${Math.round(apex.wind.toDeg - apex.aimDeg)}deg)" title="Wind direction, relative to your aim (up = toward the target)">↑</span> ` : ''}${apexWindText(apex.wind, apex.aimDeg)}</strong></div>
     <div class="apex-stat"><span>${esc(apex.club)} plays</span><strong>${Math.round(pv.total)} yds</strong></div>
     <div class="apex-stat ${pv.events.length || pv.penalty ? 'warn' : ''}"><span>Preview</span><strong>${pv.events.length ? esc(pv.events[0]) : pv.penalty ? 'Hazard' : 'Clear'}</strong></div>
     ${last ? `<div class="apex-last">Last: ${esc(last.club)} ${last.src === 'r10' ? '📡' : ''} — carry ${Math.round(last.carry)}, total ${Math.round(last.total)} yds, apex ${Math.round(last.apexFt)} ft${last.events.length ? ' · ' + esc(last.events.join(' · ')) : ''}</div>` : ''}`;
@@ -342,6 +365,9 @@ function apexRenderHome(el) {
             <div class="spd-program-meta">${yds.toLocaleString()} yds · ${t.rating} / ${t.slope}</div></button>`;
         }).join('')}
       </div>
+      <label>Wind</label>
+      <div class="toggle-group" style="margin-bottom:14px;">${Object.entries(APEX_WIND).map(([k, w]) =>
+        `<button class="toggle-btn ${apexWindLevel() === k ? 'active' : ''}" onclick="setPref('apexWind','${k}'); renderApex();">${w.name}${w.max ? ` <span style="opacity:0.7;font-weight:600;">${w.min}–${w.max} mph</span>` : ''}</button>`).join('')}</div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;">
         <button class="btn btn-primary" onclick="apexStart(getPrefs().apexTee || 'temple', 'all')">▶ Play 18</button>
         <button class="btn btn-sm" style="background:var(--gray-light);color:var(--gray-dark);" onclick="apexStart(getPrefs().apexTee || 'temple', 'front')">Front 9</button>

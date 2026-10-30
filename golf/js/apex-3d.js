@@ -677,8 +677,21 @@ function ap3Frame(t, dt) {
     const target = pv ? pv.rest : h.pin;
     // a little higher for longer shots, so a distant target (an island green) still reads
     const lift = Math.min(5, ceDist(ballPos, target) * 0.022);
-    camPos = ap3G([ballPos[0] - dir[0] * (10 + lift), ballPos[1] - dir[1] * (10 + lift)], 3.4 + lift);
-    camLook = ap3G([ballPos[0] + (target[0] - ballPos[0]) * 0.6, ballPos[1] + (target[1] - ballPos[1]) * 0.6], 0);
+    // step in toward the ball while the usual spot is in (or within a crown's
+    // reach of) the jungle or ruins
+    const wooded = (d, side) => ['jungle', 'ruins'].includes(ceSurfaceAt(h, [ballPos[0] - dir[0] * d + dir[1] * side, ballPos[1] - dir[1] * d - dir[0] * side]));
+    let back = 10 + lift;
+    while (back > 2.5 && (wooded(back, 0) || wooded(back + 4, 0) || wooded(back, 4) || wooded(back, -4))) back -= 1;
+    const cp = [ballPos[0] - dir[0] * back, ballPos[1] - dir[1] * back];
+    const lp = [ballPos[0] + (target[0] - ballPos[0]) * 0.6, ballPos[1] + (target[1] - ballPos[1]) * 0.6];
+    camPos = ap3G(cp, 3.4 + lift);
+    camLook = ap3G(lp, 0);
+    // rise over any ground between the camera and where it looks (a ball stopped behind a
+    // mound); the clearance tapers to nothing at the look point, which is on the ground
+    for (let k = 0.15; k < 0.9; k += 0.1) {
+      const g = ceElevation(h, [cp[0] + (lp[0] - cp[0]) * k, cp[1] + (lp[1] - cp[1]) * k]) / 3 + 1.2 * (1 - k);
+      if (camPos.y + (camLook.y - camPos.y) * k < g) camPos.y = (g - camLook.y * k) / (1 - k);
+    }
   }
   if (mode !== ap3.camMode) { ap3.snap = ap3.snap || mode === 'side' || mode === 'green' || ap3.camMode === 'side' || ap3.camMode === 'green'; ap3.camMode = mode; } // cut, don't pan, to and from the TV cameras
   if (ap3.snap || !ap3.camPos) { ap3.camPos = camPos.clone(); ap3.camLook = camLook.clone(); ap3.snap = false; }
@@ -695,12 +708,14 @@ function ap3Frame(t, dt) {
   ap3Wind.value = t / 1000;
   ap3UpdateBirds(t);
   ap3NatureFrame(h, o); // grass around the ball
-  ap3WaveFlag(o.flag, t);
+  const wind = (apex && apex.wind) || null;
+  ap3WaveFlag(o.flag, t, wind ? wind.mph : 0);
   const focus = ap3G(ballPos, 0);
   o.sun.position.set(focus.x + AP3_POST.SUN[0] * 400, focus.y + AP3_POST.SUN[1] * 400, focus.z + AP3_POST.SUN[2] * 400); // where the sky's sun is
   if (o.sky) o.sky.position.copy(ap3.camera.position);
   o.sun.target.position.copy(focus); o.sun.target.updateMatrixWorld();
-  o.flag.rotation.y = Math.sin(t / 700) * 0.2 + 0.4;
+  // the flag points the way the wind blows (map heading → world: +x local edge along it)
+  o.flag.rotation.y = (wind ? (90 - wind.toDeg) * Math.PI / 180 : 0.4) + Math.sin(t / 700) * (wind ? 0.12 : 0.05);
 
   ap3.camera.updateMatrixWorld();
   ap3RenderMirrors(ap3.renderer, ap3.scene, ap3.camera);

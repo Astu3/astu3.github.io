@@ -256,10 +256,18 @@ function ceObstacleAt(h, p, zFt) {
   return null;
 }
 
+// ── Wind ───────────────────────────────────────────────────────
+// { mph, toDeg } on the map → { x, y } mph in a shot's frame (x = along the aim, y = to its right)
+function ceWindRel(wind, aimDeg) {
+  const a = (wind.toDeg - aimDeg) * Math.PI / 180;
+  return { x: wind.mph * Math.cos(a), y: wind.mph * Math.sin(a) };
+}
+
 // ── Shot resolution ────────────────────────────────────────────
 // ball: [x, y]; aimDeg: heading, 0 = straight "up", + clockwise;
 // shot: launch data { ballMph, launch, direction, spin, spinAxis }; lie: strokes-gained lie
-function ceResolveShot(h, ball, aimDeg, shot, lie) {
+// wind (optional): { mph, toDeg } — the heading the wind blows toward, on the same scale as aimDeg
+function ceResolveShot(h, ball, aimDeg, shot, lie, wind) {
   const [spdMul, spinMul] = CE.LIE[lie] || [1, 1];
   const adj = { ...shot, ballMph: shot.ballMph * spdMul, spin: (shot.spin || 0) * spinMul };
   const a = aimDeg * Math.PI / 180, fwd = [Math.sin(a), Math.cos(a)], right = [Math.cos(a), -Math.sin(a)];
@@ -268,8 +276,11 @@ function ceResolveShot(h, ball, aimDeg, shot, lie) {
   //   z  = feet above the ground beneath the ball (what trees, ruins and canopies care about)
   //   za = feet relative to the hole's datum (for drawing in 3D)
   const e0 = ceElevation(h, ball);
-  const flight = simulateFlight(adj, h.elevSpec ? { ground: (x, y) => ceElevation(h, toWorld(x, y)) - e0, groundMax: ceElevMax(h) - e0 } : {});
-  const world = flight.path.map(q => { const p = toWorld(q.x, q.y), za = e0 + q.z; return { p, z: za - ceElevation(h, p), za, t: q.t }; });
+  const env = h.elevSpec ? { ground: (x, y) => ceElevation(h, toWorld(x, y)) - e0, groundMax: ceElevMax(h) - e0 } : {};
+  if (wind && wind.mph) env.wind = ceWindRel(wind, aimDeg);
+  const flight = simulateFlight(adj, env);
+  const toW = q => { const p = toWorld(q.x, q.y), za = e0 + q.z; return { p, z: za - ceElevation(h, p), za, t: q.t }; };
+  const world = flight.path.map(toW);
   const events = [];
 
   // 1. Did it clip a canopy, the trees or ruins? (not right off the club face)
@@ -281,21 +292,23 @@ function ceResolveShot(h, ball, aimDeg, shot, lie) {
     if (hit) { blocked = { ...w, hit, idx: i }; break; }
   }
 
-  let rest, flightEnd, rollPath = [];
+  let rest, flightEnd, rollPath = [], hops = [];
   if (blocked) {
     rest = blocked.p; flightEnd = blocked;
     events.push({ canopy: 'Clipped the canopy', trees: 'Into the trees', ruins: 'Hit the ruins' }[blocked.hit]);
   } else {
     flightEnd = world[world.length - 1];
     rest = flightEnd.p;
-    const landSurf = ceSurfaceAt(h, rest);
-    // 2. Bounce and roll, stopping at sand, water, trees or out of bounds
-    if (!ceIsHazard(landSurf) && landSurf !== 'ob') {
-      const rollSurf = { tee: 'fairway', jungle: null, ruins: null }[landSurf] ?? landSurf;
-      const roll = rollSurf ? bfRoll(flight, rollSurf) : { dx: 0, dy: 0, dist: 0 };
-      const len = Math.hypot(roll.dx, roll.dy) || 1;
-      const dir = [(fwd[0] * roll.dx + right[0] * roll.dy) / len, (fwd[1] * roll.dx + right[1] * roll.dy) / len];
-      if (rollSurf) rollPath = ceRollPath(h, rest, dir, roll.dist, rollSurf);
+    // 2. Bounces on the real ground, surface by surface (one can kick into sand or water),
+    //    then the roll, which stops at sand, water, trees or out of bounds
+    const surfAt = (x, y) => ceSurfaceAt(h, toWorld(x, y));
+    const b = bfBounce(flight, surfAt(flight.path[flight.path.length - 1].x, flight.path[flight.path.length - 1].y), { ...env, surface: surfAt });
+    hops = b.hops.map(toW);
+    if (hops.length) rest = hops[hops.length - 1].p;
+    const rollSurf = b.stopped ? null : ceSurfaceAt(h, rest);
+    if (rollSurf && rollSurf !== 'sand') {
+      const vel = [fwd[0] * b.rollVel[0] + right[0] * b.rollVel[1], fwd[1] * b.rollVel[0] + right[1] * b.rollVel[1]];
+      rollPath = ceRollPath(h, rest, vel, rollSurf);
       if (rollPath.length) rest = rollPath[rollPath.length - 1];
     }
   }
@@ -318,47 +331,50 @@ function ceResolveShot(h, ball, aimDeg, shot, lie) {
   } else if (ceIsHazard(surface)) {
     penalty = 1;
     events.push(surface === 'water' ? 'In the water — penalty drop' : 'Into the ravine — penalty drop');
-    rest = ceDropPoint(h, [ball, ...world.map(w => w.p), ...rollPath]);
+    rest = ceDropPoint(h, [ball, ...world.map(w => w.p), ...hops.map(w => w.p), ...rollPath]);
     surface = ceSurfaceAt(h, rest);
   }
 
   const holed = !penalty && ceDist(rest, h.pin) < 0.25; // a hole-out from off the green
-  // A blocked ball's flight ends where it hit (tracers, animation and side view stop there)
-  const flown = blocked ? world.slice(0, blocked.idx + 1) : world;
+  // A blocked ball's flight ends where it hit (tracers, animation and side view stop there);
+  // otherwise the bounces follow the flight (landIdx: where it first came down)
+  const flown = blocked ? world.slice(0, blocked.idx + 1) : world.concat(hops);
   return {
-    flight, world: flown, rollPath, rest, surface, penalty, replay, holed, events,
+    flight, world: flown, landIdx: blocked ? blocked.idx : world.length - 1, rollPath, rest, surface, penalty, replay, holed, events,
     carry: ceDist(ball, flightEnd.p), total: ceDist(ball, rest), apexFt: flight.apexFt,
   };
 }
 
 // ── Rolling on slopes ──────────────────────────────────────────
-// The flat-ground roll distance sets the starting speed (v² = 2·μ·g·d); then the
-// ball rolls under friction and gravity, so it runs out downhill, checks up
-// uphill, and curls with the side slope. It stops at sand, trees, hazards and
-// out of bounds as before, and keeps rolling if a slope is too steep to hold it.
-const CE_ROLL_MU = { fairway: 0.12, tee: 0.12, rough: 0.3, green: 0.07, fringe: 0.09, sand: 1.2 };
-function ceRollPath(h, start, dir, dist, surface) {
-  const G = 10.73, dt = 0.04; // yards/s²
-  let mu = CE_ROLL_MU[surface] ?? 0.3, v = Math.sqrt(2 * mu * G * Math.max(0, dist));
-  let vel = [dir[0] * v, dir[1] * v], p = start.slice(), last = start;
+// The ball leaves its last bounce with a real velocity (backwards, if it spun
+// back), then rolls under gravity and the surface's resistance — which grows
+// with speed, as grass slows a fast ball more than a slow one — so it runs out
+// downhill, checks up uphill, and curls with the side slope. It stops at sand,
+// trees, hazards and out of bounds, and keeps rolling if a slope is too steep to hold it.
+// vel: [x, y] yards/s
+function ceRollPath(h, start, vel, surface) {
+  const G = 10.73, dt = 0.04, YD_MS = 0.9144; // yards/s², yards/s → m/s
+  const res = sf => BF_SURFACES[sf === 'tee' ? 'fairway' : sf] || BF_SURFACES.rough;
+  let rs = res(surface), p = start.slice(), last = start;
+  vel = vel.slice();
   const path = [];
   for (let step = 0; step < 450; step++) {
     const sl = h.elevSpec ? ceSlope(h, p) : [0, 0], slope = Math.hypot(sl[0], sl[1]);
-    const speed = Math.hypot(vel[0], vel[1]);
-    if (speed < 0.12 && slope < mu * 1.6) break;  // at rest, and the slope can't move it
+    const speed = Math.hypot(vel[0], vel[1]), mu = rs.roll + (rs.drag || 0) * speed * YD_MS;
+    if (speed < 0.12 && slope < rs.roll * 1.6) break;  // at rest, and the slope can't move it
     // gravity down the slope, friction against the motion
     let ax = -G * sl[0], ay = -G * sl[1];
     if (speed > 1e-6) { ax -= mu * G * vel[0] / speed; ay -= mu * G * vel[1] / speed; }
     const nv = [vel[0] + ax * dt, vel[1] + ay * dt];
     // friction alone can't reverse the ball: if it would, it has stopped
-    if (speed > 1e-6 && nv[0] * vel[0] + nv[1] * vel[1] < 0 && slope < mu * 1.6) break;
+    if (speed > 1e-6 && nv[0] * vel[0] + nv[1] * vel[1] < 0 && slope < rs.roll * 1.6) break;
     vel = nv;
     p = [p[0] + vel[0] * dt, p[1] + vel[1] * dt];
     if (ceDist(p, last) >= 1 || path.length === 0) {
       path.push(p.slice()); last = p;
       const s = ceSurfaceAt(h, p);
       if (s === 'sand' || s === 'jungle' || s === 'ruins' || ceIsHazard(s) || s === 'ob') return path;
-      mu = CE_ROLL_MU[s === 'tee' ? 'fairway' : s] ?? 0.3;
+      rs = res(s);
     }
   }
   if (!path.length || ceDist(path[path.length - 1], p) > 0.05) path.push(p);
@@ -432,11 +448,12 @@ function ceSimulatedSwing(profile, powerPct = 100, type = 'normal', rng = Math.r
     spinAxis: ceGauss(rng) * (3 + 5 * p),
   };
 }
-// Expected carry/total for a club with no dispersion (aim previews, club suggestions)
-function ceClubDistance(profile, powerPct = 100, type = 'normal') {
+// Expected carry/total for a club with no dispersion (aim previews, club suggestions);
+// windRel (optional): { x, y } mph relative to the shot, as from ceWindRel
+function ceClubDistance(profile, powerPct = 100, type = 'normal', windRel) {
   const p = Math.max(0.1, Math.min(1, powerPct / 100)), t = CE_SHOT_TYPES[type] || CE_SHOT_TYPES.normal;
   return simulateShot({ ballMph: profile.ballMph * p * t.speed, launch: profile.launch * t.launch,
-                        spin: profile.spin * (0.55 + 0.45 * p) * t.spin }, 'fairway');
+                        spin: profile.spin * (0.55 + 0.45 * p) * t.spin }, 'fairway', windRel ? { wind: windRel } : {});
 }
 
 // ── Shot planner ───────────────────────────────────────────────
@@ -444,8 +461,11 @@ function ceClubDistance(profile, powerPct = 100, type = 'normal') {
 // pin and points down the hole (a little left/center/right), matches club and
 // power to each distance, previews normal/punch/high without dispersion, and
 // scores where the ball ends up (distance left, lie, penalties, obstacles).
+// In wind it plays the shot like a golfer would: a plays-like distance (more
+// club into it, less downwind) and aim off so the wind brings the ball back.
 // profiles: { club: { ballMph, launch, spin } }; clubs ordered longest first.
-function ceSuggestShot(h, ball, lie, profiles, clubs) {
+function ceSuggestShot(h, ball, lie, profiles, clubs, wind) {
+  const windy = wind && wind.mph >= 1;
   const allowed = lie === 'tee' ? clubs : clubs.filter(c => c !== 'Driver');
   // Full-swing carry/total per shot type + club, computed once
   const fullCache = {};
@@ -470,19 +490,31 @@ function ceSuggestShot(h, ball, lie, profiles, clubs) {
       // Match either total distance (rolls up to the target) or carry (flies to it,
       // e.g. over water); the preview decides which works.
       for (const key of ['total', 'carry']) {
-        const club = [...allowed].reverse().find(c => full(c, type)[key] >= d * 0.97);
-        if (!club) continue;
-        // power from a square-root guess, refined once against the model
-        let power = Math.min(100, Math.max(12, 100 * Math.sqrt(d / full(club, type)[key])));
-        if (power < 100) power = Math.min(100, Math.max(12, power * Math.sqrt(d / Math.max(5, ceClubDistance(profiles[club], power, type)[key]))));
-        power = Math.round(power);
+        // club, then power from a square-root guess refined once against the model
+        const pick = dist => {
+          const club = [...allowed].reverse().find(c => full(c, type)[key] >= dist * 0.97);
+          if (!club) return null;
+          let power = Math.min(100, Math.max(12, 100 * Math.sqrt(dist / full(club, type)[key])));
+          if (power < 100) power = Math.min(100, Math.max(12, power * Math.sqrt(dist / Math.max(5, ceClubDistance(profiles[club], power, type)[key]))));
+          return { club, power: Math.round(power) };
+        };
+        let pc = pick(d), aimAt = aim;
+        if (!pc) continue;
+        if (windy) {
+          const wr = ceWindRel(wind, aim);
+          const calm = ceClubDistance(profiles[pc.club], pc.power, type)[key], blown = ceClubDistance(profiles[pc.club], pc.power, type, wr)[key];
+          pc = pick(d * calm / Math.max(5, blown)) || pc;                      // plays-like distance
+          const w = ceClubDistance(profiles[pc.club], pc.power, type, wr);
+          aimAt = aim - Math.atan2(key === 'total' ? w.totalOffline : w.offline, Math.max(5, w[key])) * 180 / Math.PI; // aim off
+        }
+        const { club, power } = pc;
         const p = profiles[club], t = CE_SHOT_TYPES[type], pw = power / 100;
-        const r = ceResolveShot(h, ball, aim, { ballMph: p.ballMph * pw * t.speed, launch: p.launch * t.launch,
-                                               spin: p.spin * (0.55 + 0.45 * pw) * t.spin, direction: 0, spinAxis: 0 }, lie);
+        const r = ceResolveShot(h, ball, aimAt, { ballMph: p.ballMph * pw * t.speed, launch: p.launch * t.launch,
+                                               spin: p.spin * (0.55 + 0.45 * pw) * t.spin, direction: 0, spinAxis: 0 }, lie, wind);
         const left = r.replay ? pinDist : ceDist(r.rest, h.pin);
         const lieCost = { green: -10, fairway: 0, tee: 0, rough: 8, sand: 15, jungle: 45, ruins: 45 }[r.surface] ?? 0;
         const score = left + lieCost + r.penalty * 150 + r.events.length * 60 + (type === 'normal' ? 0 : 3);
-        if (!best || score < best.score) best = { score, target: tgt, club, power, type, aimDeg: aim };
+        if (!best || score < best.score) best = { score, target: tgt, club, power, type, aimDeg: aimAt };
         if (!r.events.length && !r.penalty) clean = true;
       }
       if (type === 'normal' && clean) break; // clean already: no need to punch or loft it
