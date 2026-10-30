@@ -7,10 +7,10 @@
 // allowed), bright things bloom, and a final pass does filmic (ACES) tone
 // mapping, contrast, saturation, a warm/cool split tone and a vignette, then
 // converts to the screen's colour space. Three.js's post-processing modules
-// are loaded on first use (desktop only; phones keep the lighter direct render).
+// are loaded on first use from golf/vendor (desktop only; phones keep the lighter direct render).
 // ════════════════════════════════════════════════════════════
 const AP3_POST = {
-  BASE: 'https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/',
+  BASE: 'golf/vendor/three/', // three@0.128.0 examples/js, bundled
   FILES: ['shaders/CopyShader.js', 'shaders/LuminosityHighPassShader.js', 'postprocessing/EffectComposer.js',
           'postprocessing/RenderPass.js', 'postprocessing/ShaderPass.js', 'postprocessing/UnrealBloomPass.js'],
   EXPOSURE: 0.95, BLOOM: { strength: 0.32, radius: 0.55, threshold: 0.92 },

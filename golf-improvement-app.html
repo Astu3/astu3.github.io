@@ -4,6 +4,11 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Golf Improvement App</title>
+  <meta name="theme-color" content="#1a3a2a" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <link rel="manifest" href="golf.webmanifest" />
+  <link rel="icon" href="golf/icons/icon-192.png" />
+  <link rel="apple-touch-icon" href="golf/icons/icon-192.png" />
   <!-- Google Identity Services -->
   <script src="https://accounts.google.com/gsi/client" async></script>
   <link rel="stylesheet" href="golf/css/app.css" />
@@ -82,15 +87,13 @@
 
   <!-- ═══════════ DASHBOARD ═══════════ -->
   <div id="page-dashboard" class="page active">
+    <div id="backup-banner"></div>
     <div id="dashboard-content"></div>
     <div class="card">
       <div class="card-title">Data &amp; Backup</div>
-      <p style="font-size:0.82rem;color:var(--gray-mid);margin-bottom:12px;">Your data is stored only in this browser. Export a backup regularly so you don't lose your rounds.</p>
-      <div style="display:flex;gap:10px;flex-wrap:wrap;">
-        <button class="btn btn-primary btn-sm" onclick="exportData()">⬇️ Export Backup</button>
-        <button class="btn btn-sm" style="background:var(--gray-light);color:var(--gray-dark);" onclick="document.getElementById('import-file').click()">⬆️ Import Backup</button>
-        <input type="file" id="import-file" accept="application/json,.json" style="display:none;" onchange="importData(this)" />
-      </div>
+      <p style="font-size:0.82rem;color:var(--gray-mid);margin-bottom:12px;">Your data is stored only on this device. Keep backups so you never lose it — and use one to move your data to another device.</p>
+      <div id="backup-status"></div>
+      <input type="file" id="import-file" accept="application/json,.json" style="display:none;" onchange="importData(this)" />
     </div>
   </div>
 
@@ -292,6 +295,7 @@
 
 <div id="toast"></div>
 
+<script src="golf/js/store.js"></script>
 <script src="golf/js/core.js"></script>
 <script src="golf/js/gamification.js"></script>
 <script src="golf/js/charts.js"></script>

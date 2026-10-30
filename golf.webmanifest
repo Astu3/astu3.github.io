@@ -1,0 +1,16 @@
+{
+  "name": "Golf Improvement",
+  "short_name": "Golf",
+  "description": "Track rounds, strokes gained, speed training, R10 range and drills, and play Apex.",
+  "id": "./golf-improvement-app",
+  "start_url": "./golf-improvement-app",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#1a3a2a",
+  "theme_color": "#1a3a2a",
+  "icons": [
+    { "src": "golf/icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "golf/icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "golf/icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

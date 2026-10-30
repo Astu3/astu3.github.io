@@ -6,3 +6,5 @@
 !/.claude/
 /.claude/*
 !/.claude/launch.json
+!/golf-sw.js
+!/golf.webmanifest

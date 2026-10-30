@@ -143,7 +143,7 @@ function uk(base) {
 function byDateDesc(a, b) { return (b.date || '').localeCompare(a.date || '') || (b.id - a.id); }
 // Read/write a stored JSON value; unreadable or missing data gives the fallback
 function loadData(key, fallback) {
-  try { return JSON.parse(localStorage.getItem(uk(key))) ?? fallback; }
+  try { return JSON.parse(store.getItem(uk(key))) ?? fallback; }
   catch { return fallback; }
 }
 // Saves never fail silently: if the browser's storage is full, older bulk data is
@@ -151,13 +151,13 @@ function loadData(key, fallback) {
 // sessions) and the save is retried; if it still won't fit, you're told to export a backup.
 function saveData(key, value) {
   const json = JSON.stringify(value);
-  try { localStorage.setItem(uk(key), json); }
+  try { store.setItem(uk(key), json); }
   catch (e) {
     if (!storageCompact() ) { showToast('⚠️ Storage is full — export a backup (Dashboard › Backup) and clear old range data'); console.error(e); return false; }
     // if the bulk history is what's being saved, save it trimmed too (else the retry undoes the trim)
     const cap = { [KEYS.range]: 2500, [KEYS.wedgeMatrix]: 600 }[key];
     const retry = cap && Array.isArray(value) && value.length > cap ? JSON.stringify(value.slice(0, cap)) : json;
-    try { localStorage.setItem(uk(key), retry); }
+    try { store.setItem(uk(key), retry); }
     catch (e2) { showToast('⚠️ Storage is full — export a backup (Dashboard › Backup) and clear old range data'); console.error(e2); return false; }
   }
   dataChanged();
@@ -166,7 +166,7 @@ function saveData(key, value) {
 // Free space by trimming the bulkiest history; returns true if anything was trimmed
 function storageCompact() {
   let freed = false;
-  const put = (k, v) => { try { localStorage.setItem(uk(k), JSON.stringify(v)); return true; } catch { return false; } }; // compaction must never throw
+  const put = (k, v) => { try { store.setItem(uk(k), JSON.stringify(v)); return true; } catch { return false; } }; // compaction must never throw
   const trim = (k, n) => { const v = loadData(k, null); if (Array.isArray(v) && v.length > n && put(k, v.slice(0, n))) freed = true; };
   trim(KEYS.range, 2500); trim(KEYS.wedgeMatrix, 600);
   const ss = loadData(KEYS.speed, null);

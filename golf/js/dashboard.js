@@ -259,7 +259,7 @@ function setHandicapGoal() {
 }
 
 function clearGoal() {
-  localStorage.removeItem(uk(KEYS.goals));
+  store.removeItem(uk(KEYS.goals));
   showToast('Goal cleared');
   renderDashboard();
 }

@@ -22,7 +22,7 @@ function getApexRounds()   { return loadData(KEYS.apexRounds, []); }
 function saveApexRounds(r) { saveData(KEYS.apexRounds, r); }
 function apexSave()        { if (apex) saveData(KEYS.apexDraft, apex); }
 function apexLoad()        { apex = loadData(KEYS.apexDraft, null); }
-function apexClear()       { apex = null; localStorage.removeItem(uk(KEYS.apexDraft)); }
+function apexClear()       { apex = null; store.removeItem(uk(KEYS.apexDraft)); }
 
 function apexHole()    { return apexCourse().holes[apex.holeIdx]; }
 function apexProfile(club) { return ceClubProfile(club, getRangeShots()); }

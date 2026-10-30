@@ -13,7 +13,7 @@
 // World units are yards: x = right, y = up, and the hole runs toward −z.
 // ════════════════════════════════════════════════════════════
 const AP3 = {
-  THREE_URL: 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js',
+  THREE_URL: 'golf/vendor/three/three.min.js', // r128, bundled so the 3D view works offline
   RAVINE_DEPTH: 9,         // yards down to a gorge floor
   RUIN_TOP: CE.RUIN_TOP_FT / 3, // yards
   BALL_R: 0.08,            // a little larger than life (0.05 yd); scaled up with distance so it stays visible
@@ -32,7 +32,7 @@ function ap3LoadThree() {
     const s = document.createElement('script');
     s.src = AP3.THREE_URL;
     s.onload = () => resolve();
-    s.onerror = () => reject(new Error('Couldn\'t load the 3D engine — the 3D view needs an internet connection.'));
+    s.onerror = () => reject(new Error('Couldn\'t load the 3D engine.'));
     document.head.appendChild(s);
   });
 }

@@ -154,7 +154,7 @@ let sgViewId = null;         // id of a saved SG round being viewed (summary)
 // The in-progress round is saved on every change so a refresh or closed tab
 // mid-round does not lose shots.
 function sgPersistDraft() { if (sgDraft) saveData(KEYS.sgDraft, sgDraft); }
-function sgClearDraft()   { sgDraft = null; localStorage.removeItem(uk(KEYS.sgDraft)); }
+function sgClearDraft()   { sgDraft = null; store.removeItem(uk(KEYS.sgDraft)); }
 function sgLoadDraft()    { sgDraft = loadData(KEYS.sgDraft, null); }
 
 function sgTargetDefault() {

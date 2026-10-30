@@ -1004,3 +1004,10 @@ input:focus, select:focus { outline: none; border-color: var(--green-light); }
 .coach-num input { max-width: 100px; }
 .coach-test-row { margin-bottom: 10px; }
 @media (max-width: 600px) { .coach-bar-row { grid-template-columns: 96px 1fr 40px; } .coach-bar-row .coach-conf, .coach-bar-row .coach-trend { display: none; } .coach-hero { flex-direction: column; align-items: flex-start; } }
+
+/* Backups */
+.backup-line { font-size: 0.86rem; margin-bottom: 10px; }
+.backup-line.overdue { color: var(--gold-dark); }
+.backup-btns { display: flex; gap: 8px; flex-wrap: wrap; }
+.btn-quiet { background: var(--gray-light); color: var(--gray-dark); }
+.backup-banner { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; background: #fff1dc; border: 1px solid var(--gold); border-radius: 12px; padding: 10px 14px; margin-bottom: 14px; font-size: 0.88rem; font-weight: 600; }

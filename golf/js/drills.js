@@ -22,7 +22,7 @@ function getDrillData()      { return loadData(KEYS.drills, { history: {}, best:
 function saveDrillData(d)    { saveData(KEYS.drills, d); }
 function getWedgeShots()     { return loadData(KEYS.wedgeMatrix, []); }
 function saveWedgeShots(s)   { saveData(KEYS.wedgeMatrix, s); }
-function drillSave()         { if (drill) saveData(KEYS.drillDraft, drill); else localStorage.removeItem(uk(KEYS.drillDraft)); }
+function drillSave()         { if (drill) saveData(KEYS.drillDraft, drill); else store.removeItem(uk(KEYS.drillDraft)); }
 function drillLoad()         { if (drill === undefined) drill = loadData(KEYS.drillDraft, null); return drill; }
 function drillActive()       { return !!drillLoad() && drill.phase === 'play'; }
 
