@@ -1054,3 +1054,9 @@ input:focus, select:focus { outline: none; border-color: var(--green-light); }
 .plan-area { font-size: 0.66rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px; color: var(--green-mid); background: var(--green-pale); border-radius: 6px; padding: 1px 6px; }
 .plan-mini { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); font-size: 0.86rem; }
 .plan-mini-next { flex: 1; color: var(--gray-dark); }
+
+.plan-ramp { margin-top: 8px; }
+.plan-steps { display: flex; gap: 4px; margin-bottom: 4px; }
+.plan-step { flex: 1; max-width: 46px; height: 6px; border-radius: 3px; background: var(--gray-light); }
+.plan-step.past { background: var(--green-light); }
+.plan-step.now { background: var(--gold); }

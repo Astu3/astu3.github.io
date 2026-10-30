@@ -3,9 +3,12 @@
 
 // ════════════════════════════════════════════════════════════
 // WEEKLY PLAN
-// Each Monday the coach's top priorities become a week of practice that
-// fits your hours (Coach › practice time): time is shared out by how many
-// strokes each area costs you, filled from a menu of the app's own drills,
+// Each Monday the coach's top priorities become a week of practice. It starts
+// small — about 30 minutes, two short blocks on your biggest weakness — because
+// the habit matters more than the hours. Finish a week and the next steps up
+// (PLAN_RAMP), until it reaches the hours you set (Coach › practice time);
+// finish about half and it holds; less and it eases back a step. Time is shared
+// out by how many strokes each area costs you, filled from a menu of the app's own drills,
 // tests and challenges plus a few no-tech routines, and grouped by where
 // you'll be — range, short-game area, putting green, home. Anything the app
 // can see (drills, speed sessions, tests, Apex rounds and challenges, range
@@ -18,6 +21,11 @@ const PLAN_PLACES = {
   home:  { icon: '🏠', name: 'Home' },
 };
 const PLAN_XP = { block: 15, week: 150 };
+const PLAN_RAMP = [30, 45, 60, 90, 120, 180, 240, 360]; // minutes a week, step by step
+const planTarget = () => (getCoach().hours || 2) * 60;
+// the highest step the plan grows to: the first that reaches your target hours
+const planTopStage = () => { const i = PLAN_RAMP.findIndex(m => m >= planTarget()); return i < 0 ? PLAN_RAMP.length - 1 : i; };
+const planBudget = stage => Math.min(PLAN_RAMP[Math.max(0, Math.min(stage, planTopStage()))], planTarget());
 const planGo = {
   drill: id => `navTo('clubs');setTimeout(()=>drillOpen('${id}'),50)`,
   challenge: id => `navTo('apex');setTimeout(()=>apexStartChallenge('${id}'),50)`,
@@ -78,21 +86,26 @@ function planMenu(area, a) {
 function getPlan()   { return loadData(KEYS.plan, null); }
 function savePlan(p) { saveData(KEYS.plan, p); }
 
-// Build this week's blocks
-function planBuild() {
-  const coach = getCoach(), minutes = (coach.hours || 2) * 60, an = coachAnalysis();
-  const focus = an.ranked.filter(a => a.sg < -0.05).slice(0, 3), blocks = [];
+// Build this week's blocks to fit `minutes`
+function planBuild(minutes) {
+  const an = coachAnalysis(), blocks = [];
+  // a small week works on fewer things: one area per half hour or so, up to three
+  const focus = an.ranked.filter(a => a.sg < -0.05).slice(0, Math.max(1, Math.min(3, Math.floor(minutes / 30))));
   const add = (b, area) => blocks.push({ ...b, area, id: `${area}-${blocks.length}` });
   // Assessment steps still to do: until the coach has evidence, the week is about getting it
   const place = { putting: 'green', short: 'short', combine: 'range', fairway: 'range', speed: 'home' };
   const auto = { putting: { test: 'putting' }, short: { test: 'short' }, combine: { drill: 'combine' }, fairway: { drill: 'fairway' }, speed: { speed: true } };
   const todo = coachAssessment().filter(s => !s.done && place[s.id]).map(s => ({ title: s.name, detail: s.desc, min: 20, place: place[s.id], auto: auto[s.id], js: s.js }));
-  if (!focus.length) { todo.forEach(b => add(b, 'assess')); return blocks; }
+  if (!focus.length) {
+    let t = 0;
+    for (const b of todo) { if (blocks.length && t + b.min > minutes + 5) break; add(b, 'assess'); t += b.min; }
+    return blocks;
+  }
   // an active speed program keeps its sessions, whatever the priorities
   const prog = spdCurrentProgram(), pos = spdPlanPosition(prog), inProgram = pos && pos.done > 0 && !pos.complete;
   let left = minutes;
-  if (inProgram) {
-    const n = Math.min(3, SPEED_PROGRAMS[prog].perWeek || 2);
+  if (inProgram) { // (fewer sessions while the habit is new)
+    const n = Math.max(1, Math.min(3, SPEED_PROGRAMS[prog].perWeek || 2, Math.floor(minutes / 30)));
     planMenu('speed').slice(0, n).forEach(b => add({ ...b, detail: `${spdProgramName(prog)} · week ${pos.week}` }, 'speed'));
     left -= n * 20;
   }
@@ -106,13 +119,14 @@ function planBuild() {
   focus.forEach(a => {
     if (a.area === 'speed' && inProgram) return;
     let budget = Math.max(15, left * weight(a) / (W || 1)), i = 0;
-    const menu = menus[a.area] = planMenu(a.area, a);
+    // early weeks: short blocks only (20 min or less), so each one is easy to start
+    const menu = menus[a.area] = planMenu(a.area, a).filter(b => minutes >= 90 || b.min <= 20);
     while (budget >= 10 && i < menu.length) { add(menu[i], a.area); budget -= menu[i].min; i++; }
     used[a.area] = i;
   });
   // time to spare: first the assessment steps not done (they sharpen the coach), then more of the top priority
   let spare = minutes - blocks.reduce((t, x) => t + x.min, 0);
-  for (const b of todo) { if (spare < 15) break; add(b, 'assess'); spare -= b.min; }
+  for (const b of todo) { if (spare < b.min) break; add(b, 'assess'); spare -= b.min; }
   const times = t => blocks.filter(x => x.title === t).length; // no routine more than twice a week
   for (let k = 0; spare >= 10 && k < 12; k++) {
     const a = focus[k % focus.length], menu = menus[a.area];
@@ -129,6 +143,8 @@ function planBuild() {
     if (!b || spare < 10) break;
     add({ ...b, detail: `Maintenance · ${b.detail}` }, k); spare -= b.min;
   }
+  // never more than the week's size (a little over is fine)
+  while (blocks.length > 1 && blocks.reduce((t, x) => t + x.min, 0) > minutes + 5) blocks.pop();
   return blocks;
 }
 
@@ -159,9 +175,19 @@ function planCurrent() {
   const week = weekStart(todayISO());
   let p = getPlan();
   if (!p || p.week !== week) {
-    const history = p ? [...(p.history || []), { week: p.week, done: planProgress(p).done, total: p.blocks.length }].slice(-52) : [];
-    p = { week, blocks: planBuild(), ticked: {}, rewarded: [], history, hours: getCoach().hours || 2 };
+    let stage = 0, note = null;
+    if (p) {
+      const pr = planProgress(p), share = pr.total ? pr.done / pr.total : 0, prev = p.stage || 0;
+      const missedWeeks = Math.round((new Date(week) - new Date(p.week)) / (7 * 864e5)) - 1; // weeks with no plan opened
+      stage = share >= 1 ? prev + 1 : share >= 0.5 ? prev : prev - 1;
+      if (missedWeeks > 0) stage = Math.min(stage, prev - 1);
+      stage = Math.max(0, Math.min(stage, planTopStage()));
+      note = stage > prev ? 'up' : stage < prev ? 'down' : 'hold';
+    }
+    const history = p ? [...(p.history || []), { week: p.week, done: planProgress(p).done, total: p.blocks.length, stage: p.stage || 0 }].slice(-52) : [];
+    p = { week, stage, note, blocks: planBuild(planBudget(stage)), ticked: {}, rewarded: [], history, hours: getCoach().hours || 2 };
     savePlan(p);
+    if (note === 'up') setTimeout(() => showToast(`📈 Last week's plan done — this week steps up to ${planBudget(stage)} min`), 1500);
   }
   return p;
 }
@@ -188,13 +214,21 @@ function planTick(id) {
   if (!p.ticked[id]) delete p.ticked[id];
   savePlan(p); planReward(p); refreshPlanViews();
 }
-function planRebuild() {
+function planRebuild(quiet) {
   const p = planCurrent(), keep = planProgress(p);
-  const blocks = planBuild(), ticked = {};
+  p.stage = Math.max(0, Math.min(p.stage || 0, planTopStage()));
+  const blocks = planBuild(planBudget(p.stage)), ticked = {};
   // keep ticks on blocks that survive (same title and area)
   blocks.forEach(b => { const old = p.blocks.find(o => o.title === b.title && o.area === b.area && keep.isDone(o) && p.ticked[o.id]); if (old) ticked[b.id] = true; });
   Object.assign(p, { blocks, ticked, hours: getCoach().hours || 2 });
-  savePlan(p); showToast('📅 Plan rebuilt from your latest coach priorities'); refreshPlanViews();
+  savePlan(p); if (!quiet) showToast('📅 Plan rebuilt from your latest coach priorities'); refreshPlanViews();
+}
+// Change the week's size by hand
+function planStep(d) {
+  const p = planCurrent(), s = Math.max(0, Math.min((p.stage || 0) + d, planTopStage()));
+  if (s === (p.stage || 0)) return showToast(d > 0 ? 'Already at your target hours — raise them in your game & goal below' : 'Already at the smallest week');
+  p.stage = s; p.note = d > 0 ? 'mine-up' : 'mine-down'; savePlan(p); planRebuild(true);
+  showToast(`📅 This week: about ${planBudget(s)} min`);
 }
 function refreshPlanViews() {
   if (document.getElementById('page-coach').classList.contains('active')) renderCoach();
@@ -214,10 +248,16 @@ function planCardHTML() {
   const areaName = a => a === 'assess' ? 'Assessment' : a === 'bag' ? 'My Bag' : (COACH_AREAS[a] || {}).name || a;
   const places = Object.keys(PLAN_PLACES).filter(k => p.blocks.some(b => b.place === k));
   const dow = (new Date().getDay() + 6) % 7, daysLeft = 7 - dow;
+  const stage = p.stage || 0, top = planTopStage(), budget = planBudget(stage), atTop = stage >= top;
+  const why = { up: '📈 Stepped up after last week', hold: 'Same size as last week — finish it all to step up', down: 'Eased back a step — a size you’ll finish beats a big one you won’t', 'mine-up': 'You stepped it up', 'mine-down': 'You eased it off — that’s fine' }[p.note] || 'Starting small: the habit first, then the hours';
   return `<div class="card" id="plan-card">
     <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
       <div class="card-title" style="margin:0;">📅 This week's plan</div>
       <span class="apex-hole-meta">${pr.done}/${pr.total} done · about ${Math.round(mins / 5) * 5} min · ${daysLeft} day${daysLeft > 1 ? 's' : ''} left</span>
+    </div>
+    <div class="plan-ramp">
+      <div class="plan-steps">${PLAN_RAMP.slice(0, top + 1).map((m, i) => `<span class="plan-step ${i < stage ? 'past' : i === stage ? 'now' : ''}" title="${Math.min(m, planTarget())} min a week"></span>`).join('')}</div>
+      <div class="apex-hole-meta">Step ${stage + 1} of ${top + 1} · <b>${budget} min</b> this week${atTop ? ' — your full target' : ` · target ${Math.round(planTarget() / 60 * 10) / 10} h`} · ${why}${!atTop && pr.done < pr.total ? ' · finish every block to step up next week' : ''}</div>
     </div>
     <div class="progress-bar-wrap" style="margin:8px 0 10px;"><div class="progress-bar" style="width:${pr.total ? Math.round(pr.done / pr.total * 100) : 0}%"></div></div>
     ${p.blocks.length ? places.map(k => { const list = p.blocks.filter(b => b.place === k);
@@ -230,8 +270,12 @@ function planCardHTML() {
           </div>`; }).join('')}</div>`; }).join('')
       : `<p style="font-size:0.84rem;color:var(--gray-mid);">Nothing to plan yet — your coach needs a little evidence first.</p>`}
     <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:8px;flex-wrap:wrap;">
-      <span class="apex-hole-meta">Built for ${p.hours} h a week (change it below) · +${PLAN_XP.block} XP a block, +${PLAN_XP.week} for the whole week</span>
-      <button class="btn btn-sm btn-quiet" onclick="planRebuild()">↻ Rebuild</button>
+      <span class="apex-hole-meta">+${PLAN_XP.block} XP a block, +${PLAN_XP.week} for the whole week</span>
+      <span style="display:flex;gap:6px;flex-wrap:wrap;">
+        <button class="btn btn-sm btn-quiet" onclick="planStep(-1)" ${stage ? '' : 'disabled'}>− Ease off</button>
+        <button class="btn btn-sm btn-quiet" onclick="planStep(1)" ${atTop ? 'disabled' : ''}>+ Step up</button>
+        <button class="btn btn-sm btn-quiet" onclick="planRebuild()">↻ Rebuild</button>
+      </span>
     </div>
   </div>`;
 }

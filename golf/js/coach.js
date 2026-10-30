@@ -305,7 +305,7 @@ function renderCoach() {
       <div class="drill-opt"><label>Current handicap (or your best guess)</label><input type="number" step="0.1" min="-5" max="54" value="${isFinite(c.handicap) ? c.handicap : ''}" placeholder="${an.current ?? 'e.g. 18'}" onchange="coachSet('handicap', this.value === '' ? null : parseFloat(this.value))" style="max-width:120px;"></div>
       <div class="drill-opt"><label>Goal handicap — the coach measures you against this</label><input type="number" step="0.1" min="-5" max="54" value="${isFinite(c.goal) ? c.goal : ''}" placeholder="${an.goal}" onchange="coachSet('goal', this.value === '' ? null : parseFloat(this.value))" style="max-width:120px;"></div>
       <div class="drill-opt"><label>Where do you feel you lose the most shots?</label><div class="toggle-group">${Object.entries(COACH_AREAS).map(([k, A]) => `<button class="toggle-btn ${c.weak === k ? 'active' : ''}" onclick="coachSet('weak','${k}')">${A.name}</button>`).join('')}</div></div>
-      <div class="drill-opt"><label>Practice time per week (sizes your weekly plan)</label><div class="toggle-group">${[1, 2, 4, 6].map(hrs => `<button class="toggle-btn ${(c.hours || 2) === hrs ? 'active' : ''}" onclick="coachSet('hours', ${hrs}); planRebuild()">${hrs === 6 ? '6+' : hrs} h</button>`).join('')}</div></div>
+      <div class="drill-opt"><label>Practice time per week — your target (the weekly plan starts small and builds up to it)</label><div class="toggle-group">${[1, 2, 4, 6].map(hrs => `<button class="toggle-btn ${(c.hours || 2) === hrs ? 'active' : ''}" onclick="coachSet('hours', ${hrs}); planRebuild()">${hrs === 6 ? '6+' : hrs} h</button>`).join('')}</div></div>
     </div>`;
 }
 

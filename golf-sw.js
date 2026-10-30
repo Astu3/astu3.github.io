@@ -4,7 +4,7 @@
 // two versions. A new version downloads in the background, then waits: the app offers
 // "Update" and it takes over on reload. On localhost (development) files come from the
 // network first, so edits show up at once.
-const VERSION = '24f690606ced';
+const VERSION = 'f270eb431177';
 const CACHE = 'golf-app-' + VERSION;
 const PAGE = 'golf-improvement-app';
 const EXTRA = ['golf.webmanifest', 'golf/icons/icon-192.png', 'golf/icons/icon-512.png', 'golf/icons/maskable-512.png',
