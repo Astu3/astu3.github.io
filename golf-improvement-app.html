@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Golf Improvement App</title>
+  <!-- Google Identity Services -->
+  <script src="https://accounts.google.com/gsi/client" async></script>
+  <link rel="stylesheet" href="golf/css/app.css" />
+</head>
+<body>
+
+<header>
+  <div class="header-top">
+    <div class="header-left">
+      <div class="logo">⛳</div>
+      <div>
+        <div class="app-title">Golf Improvement</div>
+        <div class="app-subtitle">Track · Analyze · Improve</div>
+      </div>
+    </div>
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+      <div class="xp-header" id="xp-header">
+        <div class="xp-tier-badge" id="tier-badge">Rookie</div>
+        <div class="xp-bar-wrap">
+          <div class="xp-bar-label">
+            <span id="xp-label">0 XP</span>
+            <span id="xp-next-label">500 to next</span>
+          </div>
+          <div class="xp-bar-bg">
+            <div class="xp-bar-fill" id="xp-bar-fill" style="width:0%"></div>
+          </div>
+        </div>
+      </div>
+      <div class="user-area" id="user-area" style="display:none;">
+        <img class="user-avatar" id="user-avatar" src="" alt="" />
+        <span class="user-name" id="user-name"></span>
+        <button class="signout-btn" onclick="signOut()">Sign out</button>
+      </div>
+    </div>
+  </div>
+  <nav>
+    <button class="active" onclick="navTo('dashboard')">Dashboard</button>
+    <button onclick="navTo('coach')">Coach</button>
+    <button onclick="navTo('new-round')">New Round</button>
+    <button onclick="navTo('sg-round')">SG Round</button>
+    <button onclick="navTo('history')">History</button>
+    <button onclick="navTo('clubs')">Range &amp; Clubs</button>
+    <button onclick="navTo('speed')">Speed</button>
+    <button onclick="navTo('apex')">Apex</button>
+    <button onclick="navTo('practice')">Practice</button>
+    <button onclick="navTo('badges')">Badges</button>
+    <button onclick="navTo('quests')">Quests</button>
+    <button onclick="navTo('putting')">Putting</button>
+  </nav>
+</header>
+
+<!-- ═══════════ LOGIN OVERLAY ═══════════ -->
+<div id="login-overlay">
+  <div class="login-box">
+    <div class="login-logo">⛳</div>
+    <div class="login-title">Golf Improvement</div>
+    <div class="login-sub">Track · Analyze · Improve</div>
+
+    <div class="login-features">
+      <div class="login-feature"><span class="login-feature-icon">🏆</span> XP & tier progression system</div>
+      <div class="login-feature"><span class="login-feature-icon">🏅</span> Daily tasks & achievements</div>
+      <div class="login-feature"><span class="login-feature-icon">📊</span> Handicap tracking & analytics</div>
+      <div class="login-feature"><span class="login-feature-icon">☁️</span> Your data tied to your account</div>
+    </div>
+
+    <div id="no-client-msg" class="no-client-msg" style="display:none;">
+      ⚠️ Google Client ID not set up yet.<br>See setup instructions below.
+    </div>
+
+    <div id="google-btn-wrap"></div>
+    <p class="login-note">Signing in keeps your data separate from other players on this device.</p>
+  </div>
+</div>
+
+<main>
+
+  <!-- ═══════════ DASHBOARD ═══════════ -->
+  <div id="page-dashboard" class="page active">
+    <div id="dashboard-content"></div>
+    <div class="card">
+      <div class="card-title">Data &amp; Backup</div>
+      <p style="font-size:0.82rem;color:var(--gray-mid);margin-bottom:12px;">Your data is stored only in this browser. Export a backup regularly so you don't lose your rounds.</p>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;">
+        <button class="btn btn-primary btn-sm" onclick="exportData()">⬇️ Export Backup</button>
+        <button class="btn btn-sm" style="background:var(--gray-light);color:var(--gray-dark);" onclick="document.getElementById('import-file').click()">⬆️ Import Backup</button>
+        <input type="file" id="import-file" accept="application/json,.json" style="display:none;" onchange="importData(this)" />
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════ NEW ROUND ═══════════ -->
+  <div id="page-new-round" class="page">
+    <div class="section-header">
+      <div class="page-title" id="new-round-title">New Round</div>
+    </div>
+
+    <div id="edit-banner" style="display:none;align-items:center;justify-content:space-between;gap:10px;background:#fff3e8;border:2px solid var(--gold);border-radius:var(--radius);padding:12px 16px;margin-bottom:16px;">
+      <span style="font-size:0.88rem;font-weight:600;color:var(--gold-dark);">✏️ You're editing an existing round. Saving will update it.</span>
+      <button class="btn btn-sm" style="background:white;color:var(--gray-dark);" onclick="cancelEdit()">Cancel</button>
+    </div>
+
+    <!-- Hole Count Toggle -->
+    <div class="card" style="padding:14px 20px;">
+      <div class="card-title" style="margin-bottom:8px;">Round Format</div>
+      <div class="toggle-group">
+        <button class="toggle-btn active" id="toggle-9" onclick="setHoleCount(9)">9 Holes</button>
+        <button class="toggle-btn" id="toggle-18" onclick="setHoleCount(18)">18 Holes</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Round Info</div>
+      <div class="form-row">
+        <div>
+          <label>Course Name</label>
+          <div class="autocomplete-wrap">
+            <input type="text" id="course-name" placeholder="e.g. Pebble Beach" autocomplete="off"
+              oninput="filterCourseAutocomplete()" onfocus="filterCourseAutocomplete()" />
+            <div class="autocomplete-list" id="course-autocomplete-list" style="display:none;"></div>
+          </div>
+        </div>
+        <div>
+          <label>Date</label>
+          <input type="date" id="round-date" />
+        </div>
+      </div>
+      <div class="form-row triple">
+        <div>
+          <label>Course Par</label>
+          <input type="number" id="course-par" value="36" min="27" max="80" />
+        </div>
+        <div>
+          <label id="rating-label">Course Rating</label>
+          <input type="number" id="course-rating" value="36.0" step="0.1" oninput="updateTotals()" />
+          <div id="rating-hint" style="font-size:0.7rem;color:var(--gray-mid);margin-top:3px;">9-hole rating (≈ half the 18-hole rating, ~35)</div>
+        </div>
+        <div>
+          <label>Slope Rating</label>
+          <input type="number" id="slope-rating" value="113" min="55" max="155" oninput="updateTotals()" />
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Scorecard</div>
+      <p style="font-size:0.82rem; color:var(--gray-mid); margin-bottom:14px;">
+        Enter score, putts, penalty strokes (Pen), and tick FIR (fairway in regulation) &amp; GIR (green in regulation) for each hole.
+      </p>
+      <div class="scorecard-wrap">
+        <table class="scorecard" id="scorecard-table">
+          <thead>
+            <tr>
+              <th>Hole</th><th>Par</th><th>Score</th><th>Putts</th><th>Pen</th><th>FIR</th><th>GIR</th>
+            </tr>
+          </thead>
+          <tbody id="scorecard-body"></tbody>
+          <tfoot id="scorecard-foot"></tfoot>
+        </table>
+      </div>
+      <div class="round-summary" id="round-summary">
+        <div class="round-summary-box">
+          <div class="round-summary-value" id="summary-score">—</div>
+          <div class="round-summary-label">Total Score</div>
+        </div>
+        <div class="round-summary-box">
+          <div class="round-summary-value" id="summary-topar">—</div>
+          <div class="round-summary-label">To Par</div>
+        </div>
+        <div class="round-summary-box">
+          <div class="round-summary-value" id="summary-diff">—</div>
+          <div class="round-summary-label">Differential</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Notes</div>
+      <textarea id="round-notes" rows="3"
+        style="width:100%;padding:10px;border:2px solid var(--gray-light);border-radius:8px;font-size:0.88rem;resize:vertical;"
+        placeholder="How did it go? Any swing thoughts, conditions, or things to work on..."></textarea>
+    </div>
+
+    <div style="display:flex; gap:12px; flex-wrap:wrap;">
+      <button class="btn btn-primary" id="save-round-btn" onclick="saveRound()">💾 Save Round</button>
+      <button class="btn" style="background:var(--gray-light);color:var(--gray-dark);" onclick="resetScorecard()">↺ Reset</button>
+    </div>
+  </div>
+
+  <!-- ═══════════ HISTORY ═══════════ -->
+  <div id="page-history" class="page">
+    <div class="section-header">
+      <div class="page-title">Round History</div>
+    </div>
+    <div id="history-content"></div>
+  </div>
+
+  <!-- ═══════════ PRACTICE ═══════════ -->
+  <div id="page-practice" class="page">
+    <div class="section-header">
+      <div class="page-title">Practice Plan</div>
+    </div>
+    <div id="practice-content"></div>
+  </div>
+
+  <!-- ═══════════ QUESTS ═══════════ -->
+  <div id="page-quests" class="page">
+    <div class="section-header">
+      <div class="page-title">Quests</div>
+    </div>
+    <div id="quests-content"></div>
+  </div>
+
+  <!-- ═══════════ COACH ═══════════ -->
+  <div id="page-coach" class="page">
+    <div id="coach-content"></div>
+  </div>
+
+  <!-- ═══════════ PUTTING ═══════════ -->
+  <div id="page-putting" class="page">
+    <div class="section-header">
+      <div class="page-title">Putting Challenges</div>
+    </div>
+    <div id="putting-content"></div>
+  </div>
+
+  <!-- ═══════════ BADGES ═══════════ -->
+  <div id="page-badges" class="page">
+    <div class="section-header">
+      <div class="page-title">Badges</div>
+    </div>
+    <div id="badges-content"></div>
+  </div>
+
+  <!-- ═══════════ SG ROUND (shot-by-shot) ═══════════ -->
+  <div id="page-sg-round" class="page">
+    <div id="sg-round-content"></div>
+  </div>
+
+  <!-- ═══════════ CLUBS ═══════════ -->
+  <div id="page-clubs" class="page">
+    <div class="section-header">
+      <div class="page-title">Range &amp; Club Data</div>
+    </div>
+    <div id="clubs-content"></div>
+  </div>
+
+  <!-- ═══════════ APEX (virtual course) ═══════════ -->
+  <div id="page-apex" class="page">
+    <div id="apex-content"></div>
+  </div>
+
+  <!-- ═══════════ SPEED TRAINING (Garmin R10) ═══════════ -->
+  <div id="page-speed" class="page">
+    <div class="section-header">
+      <div class="page-title">Speed Training</div>
+    </div>
+    <div id="speed-content"></div>
+  </div>
+
+</main>
+
+<!-- Detail Modal -->
+<div class="modal-overlay" id="round-modal">
+  <div class="modal">
+    <h2>Round Details</h2>
+    <div id="modal-body"></div>
+    <div class="modal-actions">
+      <button class="btn btn-danger" id="modal-delete-btn">Delete Round</button>
+      <button class="btn btn-gold" id="modal-edit-btn">✏️ Edit Round</button>
+      <button class="btn btn-primary" onclick="closeModal()">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- Confirm Delete Modal -->
+<div class="modal-overlay" id="confirm-modal">
+  <div class="modal" style="max-width:360px;">
+    <h2 style="color:var(--red);">Delete Round?</h2>
+    <p style="color:var(--gray-dark);font-size:0.92rem;line-height:1.5;">This will permanently remove this round. This cannot be undone.</p>
+    <div class="modal-actions">
+      <button class="btn" style="background:var(--gray-light);color:var(--gray-dark);" onclick="closeConfirmModal()">Cancel</button>
+      <button class="btn btn-danger" id="confirm-delete-btn">Delete</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script src="golf/js/core.js"></script>
+<script src="golf/js/gamification.js"></script>
+<script src="golf/js/charts.js"></script>
+<script src="golf/js/rounds.js"></script>
+<script src="golf/js/analytics.js"></script>
+<script src="golf/js/dashboard.js"></script>
+<script src="golf/js/history.js"></script>
+<script src="golf/js/practice.js"></script>
+<script src="golf/js/backup.js"></script>
+<script src="golf/js/strokes-gained.js"></script>
+<script src="golf/js/ballflight.js"></script>
+<script src="golf/js/r10.js"></script>
+<script src="golf/js/speed.js"></script>
+<script src="golf/js/speed-plan.js"></script>
+<script src="golf/js/speed-live.js"></script>
+<script src="golf/js/speed-insights.js"></script>
+<script src="golf/js/speed-extras.js"></script>
+<script src="golf/js/progress.js"></script>
+<script src="golf/js/coach.js"></script>
+<script src="golf/js/range.js"></script>
+<script src="golf/js/drills.js"></script>
+<script src="golf/js/course-engine.js"></script>
+<script src="golf/js/apex-course.js"></script>
+<script src="golf/js/apex-game.js"></script>
+<script src="golf/js/apex-render.js"></script>
+<script src="golf/js/apex-3d.js"></script>
+<script src="golf/js/apex-3d-look.js"></script>
+<script src="golf/js/apex-3d-fx.js"></script>
+<script src="golf/js/apex-3d-post.js"></script>
+<script src="golf/js/apex-3d-nature.js"></script>
+<script src="golf/js/apex-audio.js"></script>
+<script src="golf/js/apex-challenges.js"></script>
+<script src="golf/js/apex-stats.js"></script>
+<script src="golf/js/r10-ui.js"></script>
+<script src="golf/js/main.js"></script>
+</body>
+</html>

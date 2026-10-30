@@ -1,0 +1,8 @@
+# This folder holds other projects too: only the golf app is tracked.
+/*
+!/.gitignore
+!/golf-improvement-app.html
+!/golf/
+!/.claude/
+/.claude/*
+!/.claude/launch.json
