@@ -7,7 +7,7 @@
 // Loaded before app.js; the app's helpers are only called once it's running.
 // ═══════════════════════════════════════════════════════════════════════════
 
-const BADGES_VERSION = 2;
+const BADGES_VERSION = 3;
 
 const BADGE_GROUPS = {
   lessons:  'Lessons',
@@ -55,6 +55,9 @@ function badgeContext(p) {
     mastered: masteredKeys(p, true),
     drills: h.filter(x => x.kind === 'drill' && x.ref === 'weak').length,
     mixDrills: h.filter(x => x.kind === 'drill' && x.ref === 'mixup').length,
+    fingerDrills: h.filter(x => x.kind === 'drill' && x.ref === 'finger').length,
+    balanced: fingerStats(p).every(s => s.n + s.m >= 100 && missRate(s) <= 0.03),
+    putt: n => { const g = p.games.putt; return !!g && g.plays > 0 && g.best <= n; },
     game: id => p.games[id] || { best: 0, plays: 0 },
     steady: trend.length >= 20 && mean(trend.slice(-20).map(x => x.acc)) >= 98,
     lockedIn: trend.length >= 10 && trend.slice(-10).every(x => x.acc >= 97),
@@ -149,12 +152,21 @@ const BADGES = [
   ...tier('games', [[7, '🏟️', 'Touchdown!'], [14, '✌️', 'Two scores'], [21, '🎩', 'Hat trick'], [35, '🛡️', 'Dynasty']],
     n => ({ id: `tm${n}`, how: n === 7 ? 'Score a touchdown in the Two-Minute Drill' : `Score ${n / 7} touchdowns in one Two-Minute Drill`, test: c => c.game('twominute').best >= n })),
   { id: 'tmplays', group: 'games', icon: '🧢', name: 'Two-minute warrior', how: 'Play the Two-Minute Drill 10 times', test: c => c.game('twominute').plays >= 10 },
+  { id: 'pt0', group: 'games', icon: '🟩', name: 'On the green', how: 'Play a round of Putt Out', test: c => c.game('putt').plays >= 1 },
+  ...tier('games', [[18, '🏳️', 'Even par'], [17, '🐤', 'Under par'], [14, '🔥', 'Hot putter'], [9, '🕳️', 'Lights out']],
+    n => ({ id: `pt${n}`, how: n === 9 ? 'One-putt all nine holes in Putt Out' : n === 18 ? 'Shoot even par (18) or better in Putt Out' : `Shoot ${n} or better in Putt Out`, test: c => c.putt(n) })),
+  { id: 'ptplays', group: 'games', icon: '🧤', name: 'Practice green', how: 'Play Putt Out 10 times', test: c => c.game('putt').plays >= 10 },
 
   // ── Coaching ───────────────────────────────────────────────────────────
   ...tier('coaching', [[1, '🛠️', 'Tune-up'], [10, '🔧', 'Mechanic'], [50, '⚙️', 'Engineer']],
     n => ({ id: `drill${n}`, how: n === 1 ? 'Do a weak-key drill' : `Do ${n} weak-key drills`, test: c => c.drills >= n })),
   { id: 'mix1', group: 'coaching', icon: '🔀', name: 'Untangled', how: 'Do a mix-up drill', test: c => c.mixDrills >= 1 },
   { id: 'mix10', group: 'coaching', icon: '🧩', name: 'Puzzle solver', how: 'Do 10 mix-up drills', test: c => c.mixDrills >= 10 },
+  { id: 'finger1', group: 'coaching', icon: '🖐️', name: 'Finger workout', how: 'Do a finger drill', test: c => c.fingerDrills >= 1 },
+  { id: 'finger10', group: 'coaching', icon: '💪', name: 'Finger strength', how: 'Do 10 finger drills', test: c => c.fingerDrills >= 10 },
+  { id: 'balanced', group: 'coaching', icon: '⚖️', name: 'Balanced hands', how: 'Every finger at 3% misses or fewer, with at least 100 presses each', test: c => c.balanced },
+  { id: 'report', group: 'coaching', icon: '📊', name: 'Report card', how: 'Open your weekly report card', test: c => (c.p.reportsOpened || 0) >= 1 },
+  { id: 'straightA', group: 'coaching', icon: '🅰️', name: 'Straight A\'s', how: 'Get an A in all four areas of a weekly report card', test: c => !!c.p.straightAs },
   { id: 'know10', group: 'coaching', icon: '🗝️', name: 'Ten keys known', how: 'Know 10 keys well enough that the guide fades them', test: c => c.mastered.size >= 10 },
   { id: 'eyes', group: 'coaching', icon: '👀', name: 'No peeking', how: 'Know all 26 letters well enough that the guide fades them', test: c => allLetters.every(k => c.mastered.has(k)) },
   { id: 'digits', group: 'coaching', icon: '🧮', name: 'Numbers by feel', how: 'Know every number key well enough that the guide fades it', test: c => [...'1234567890'].every(k => c.mastered.has(k)) },

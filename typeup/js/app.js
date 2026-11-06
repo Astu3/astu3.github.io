@@ -132,6 +132,8 @@ function newProfile(name, avatar) {
     badgesV: BADGES_VERSION,
     plansDone: 0,   // whole Today's practice sessions finished
     ghostWins: 0,   // passages where you beat your own best run
+    snaps: {},      // week start -> { k: key totals, x: mix-up totals } when that week began
+    reportSeen: null, // the last weekly report opened, so Home stops announcing it
     msBank: 0,      // practice time from old runs trimmed out of history
   };
 }
@@ -159,7 +161,11 @@ function normalizeProfile(p) {
     .filter(c => c && typeof c.title === 'string' && typeof c.text === 'string')
     .map(c => ({ id: /^[\w-]{1,40}$/.test(c.id) ? c.id : newId(), title: c.title.slice(0, 60), text: cleanText(c.text).text.slice(0, MY_MAX), added: num(c.added) ? c.added : Date.now() }))
     .filter(c => c.text).slice(0, MY_LIMIT);
-  for (const k of ['plansDone', 'ghostWins', 'msBank']) if (!num(p[k])) p[k] = 0;
+  for (const k of ['plansDone', 'ghostWins', 'msBank', 'reportsOpened']) if (!num(p[k])) p[k] = 0;
+  if (p.straightAs != null && !num(p.straightAs)) delete p.straightAs;
+  if (!p.snaps || typeof p.snaps !== 'object') p.snaps = {};
+  for (const [wk, s] of Object.entries(p.snaps)) if (!s || typeof s.k !== 'object' || typeof s.x !== 'object') delete p.snaps[wk];
+  if (typeof p.reportSeen !== 'string') p.reportSeen = null;
   p.goalDays = Array.isArray(p.goalDays) ? p.goalDays.filter(d => typeof d === 'string')
     : [...dayTotals(p).entries()].filter(([, ms]) => ms >= goalMs(p)).map(([d]) => d);
   if (!p.mixups || typeof p.mixups !== 'object') p.mixups = {};
@@ -640,7 +646,23 @@ function startTyping(opts) {
   });
 }
 
+// Monday-to-Sunday weeks, for the weekly report.
+const weekStart = t => { const d = new Date(t); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); return d; };
+const weekKey = t => weekStart(t).toDateString();
+const compactKeys = p => Object.fromEntries(Object.entries(keyStats(p)).map(([k, s]) => [k, [s.n, s.m]]));
+// Key and mix-up totals as they stood when each week began, so a week's own
+// numbers are the difference between two snapshots. Twelve weeks are kept.
+function snapWeek(p) {
+  const wk = weekKey(Date.now());
+  p.snaps ||= {};
+  if (p.snaps[wk]) return;
+  p.snaps[wk] = { k: compactKeys(p), x: { ...p.mixups } };
+  const keys = Object.keys(p.snaps).sort((a, b) => new Date(a) - new Date(b));
+  keys.slice(0, -12).forEach(k => delete p.snaps[k]);
+}
+
 function recordKeys(p, session) {
+  snapWeek(p);
   const touch = ch => p.keys[ch] || (p.keys[ch] = { n: 0, m: 0, t: 0, tn: 0 });
   for (const [ch, n] of Object.entries(session.misses)) touch(ch).m += n;
   for (const [ch, [t, n]] of Object.entries(session.lat)) { const k = touch(ch); k.t += t; k.tn += n; }
@@ -793,6 +815,94 @@ function drillText(p) {
   if (sentences.length) parts.push(fillTo(70, () => pick(sentences)));
   if (!parts.length) return null;
   return { text: parts.join(' '), keys, pairs };
+}
+
+// ── Fingers ────────────────────────────────────────────────────────────────
+// The same numbers as the keyboard heatmap, added up per finger, so a weak
+// pinky shows up even when no single key stands out.
+const FINGER_ORDER = ['lp', 'lr', 'lm', 'li', 'ri', 'rm', 'rr', 'rp'];
+function fingerStats(p) {
+  const ks = keyStats(p);
+  return FINGER_ORDER.map(f => {
+    const s = { f, n: 0, m: 0, t: 0, tn: 0 };
+    FINGER_KEYS[f].forEach(k => { const x = ks[k]; if (x) { s.n += x.n; s.m += x.m; s.t += x.t; s.tn += x.tn; } });
+    return s;
+  });
+}
+// Scored like weak keys: worse than your own average on misses and speed.
+function weakestFinger(p) {
+  const fs = fingerStats(p).filter(s => s.n + s.m >= 40);
+  if (fs.length < 4) return null;
+  const baseRate = Math.max(0.01, mean(fs.map(missRate)));
+  const baseMs = mean(fs.filter(s => s.tn >= 10).map(avgMs)) || 1;
+  return fs.map(s => [s, missRate(s) / baseRate + (s.tn >= 10 ? avgMs(s) / baseMs : 1)]).sort((a, b) => b[1] - a[1])[0][0];
+}
+function fingerDrillText(p, f) {
+  const learned = learnedSet(p);
+  const keys = FINGER_KEYS[f].filter(k => k.length === 1 && learned.has(k));
+  const letters = keys.filter(k => k >= 'a' && k <= 'z');
+  const home = HOME_KEY[f];
+  const warm = keys.flatMap(k => (k === home ? [k.repeat(3)] : [home + k + home, k.repeat(3)]));
+  const words = WORDS.filter(w => [...w].every(c => learned.has(c)));
+  // Words that lean on this finger the most
+  const heavy = words.map(w => [w, [...w].filter(c => letters.includes(c)).length / w.length])
+    .filter(([, share]) => share > 0).sort((a, b) => b[1] - a[1]).slice(0, 60).map(([w]) => w);
+  const parts = [];
+  if (warm.length) parts.push(fillTo(50, (() => { let i = 0; return () => warm[i++ % warm.length]; })()));
+  if (heavy.length >= 4) parts.push(fillTo(120, () => pick(heavy)));
+  else {
+    const sentences = Object.values(POOLS).flat().filter(s => keys.some(k => s.includes(k)) && [...s].every(c => learned.has(c)));
+    if (sentences.length) parts.push(fillTo(90, () => pick(sentences)));
+  }
+  return parts.join(' ') || fillTo(120, () => pick(words.length ? words : WORDS.slice(0, 20)));
+}
+function runFingerDrill(f, back = 'progress') {
+  const p = me();
+  startTyping({
+    title: `Finger drill: ${FINGER_NAMES[f]}`, sub: `Every key your ${FINGER_NAMES[f].toLowerCase()} owns, then words that lean on it`,
+    text: fingerDrillText(p, f),
+    onBack: () => go(back),
+    onRestart: () => runFingerDrill(f, back),
+    onDone: (result, show) => {
+      recordRun(p, { kind: 'drill', ref: 'finger', wpm: result.wpm, acc: result.acc, ms: result.ms, chars: result.chars });
+      if (!show) return;
+      showResults({
+        title: 'Finger drill done', result, same: h => h.kind === 'drill' && h.ref === 'finger',
+        buttons: [{ label: 'Try again', action: () => runFingerDrill(f, back) }, { label: 'See my progress', action: () => go('progress') }],
+      });
+    },
+  });
+}
+function fingersSection(p) {
+  const fs = fingerStats(p);
+  const weak = weakestFinger(p);
+  const H = HEAT.mistakes;
+  const tone = s => s.n + s.m >= 20 ? HEAT_MIX[H.bins.filter(b => missRate(s) >= b).length] : null;
+  const rows = fs.map(s => {
+    const enough = s.n + s.m >= 20;
+    return `<tr class="${weak && s.f === weak.f ? 'weakest' : ''}"><td><span class="fdot" style="--heat:var(--warm);--h:${tone(s) ?? 0}"></span>${FINGER_NAMES[s.f]}</td>
+      <td>${(s.n + s.m).toLocaleString()}</td><td>${enough ? (missRate(s) * 100).toFixed(1) + '%' : '–'}</td><td>${s.tn >= 10 ? (avgMs(s) / 1000).toFixed(2) + 's' : '–'}</td></tr>`;
+  }).join('');
+  return `<div class="card fingers-card">
+    <div class="fingers-hands" id="fingers-hands">${handsSVG()}</div>
+    <div class="fingers-body">
+      <table class="finger-table"><thead><tr><th>Finger</th><th>Presses</th><th>Missed</th><th>Per press</th></tr></thead><tbody>${rows}</tbody></table>
+      ${weak ? `<div class="weak-finger"><p>Your <b>${FINGER_NAMES[weak.f].toLowerCase()}</b> needs the most help right now: ${(missRate(weak) * 100).toFixed(1)}% missed${weak.tn >= 10 ? `, ${(avgMs(weak) / 1000).toFixed(2)}s per press` : ''}.</p>
+        <button class="btn warm" data-finger="${weak.f}">Drill my ${FINGER_NAMES[weak.f].toLowerCase()} →</button></div>`
+        : '<p class="muted small" style="margin-top:12px">Type a bit more and TypeUp will find the finger that needs the most help.</p>'}
+    </div>
+  </div>`;
+}
+// Shade each finger of the hands picture by how often it misses.
+function paintFingerHands(p) {
+  const box = $('#fingers-hands');
+  if (!box) return;
+  const H = HEAT.mistakes;
+  fingerStats(p).forEach(s => {
+    if (s.n + s.m < 20) return;
+    const mix = HEAT_MIX[H.bins.filter(b => missRate(s) >= b).length];
+    $$(`.finger[data-f="${s.f}"]`, box).forEach(el => { el.style.fill = `color-mix(in oklab, var(--warm) ${mix}%, #232a52)`; });
+  });
 }
 
 // ── Mix-ups ────────────────────────────────────────────────────────────────
@@ -975,7 +1085,7 @@ function go(screen, ...args) {
   if (p) {
     const streak = streakInfo(p).streak;
     $('#btn-me').innerHTML = `<span class="av" style="--c:${p.color}">${p.avatar}</span>${esc(p.name)}${streak ? `<span class="streak" title="${streak}-day streak">🔥${streak}</span>` : ''}`;
-    const tab = { home: 'home', lessons: 'lessons', lesson: 'lessons', intro: 'lessons', passages: 'passages', progress: 'progress', badges: 'progress', games: 'games', fairway: 'games', twominute: 'games' }[screen];
+    const tab = { home: 'home', lessons: 'lessons', lesson: 'lessons', intro: 'lessons', passages: 'passages', progress: 'progress', badges: 'progress', report: 'progress', games: 'games', fairway: 'games', twominute: 'games', putt: 'games' }[screen];
     $$('.tabs button').forEach(b => b.classList.toggle('on', b.dataset.go === tab));
     paintSoundBtn();
   }
@@ -1055,6 +1165,8 @@ const SCREENS = {
     $('#app').innerHTML = `
       <h1>Hi, ${esc(p.name)}.</h1>
       <p class="muted" style="margin-top:6px">${runs.length ? 'Ready for a little practice?' : 'Welcome to TypeUp. Let\'s teach your fingers where to go.'}</p>
+      ${reportReady(p) ? `<div class="card weak-card report-ready" style="margin-top:18px"><div><p><b>📊 Your report card for last week is ready.</b> See your grades, your most improved key and how this week compares.</p></div>
+        <button class="btn ghost" id="go-report">See my report card →</button></div>` : ''}
       <div class="card plan-card">
         <div class="plan-head">
           <div><div class="label">Today's practice</div>
@@ -1096,6 +1208,7 @@ const SCREENS = {
         <span class="n">${Math.round(h.wpm)} WPM · ${fmtAcc(h.acc)}</span><span class="muted small">${fmtDay(h.t)}</span></div>`).join('')}</div>` : ''}`;
     $('#go-next').onclick = next.go;
     $('#go-plan').onclick = startPlan;
+    $('#go-report') && ($('#go-report').onclick = () => go('report'));
     $('#go-drill') && ($('#go-drill').onclick = () => runDrill('home'));
     $('#go-backup') && ($('#go-backup').onclick = () => { backupNow(); go('home'); });
     setKeyHandler(e => { if (e.key === 'Enter') { e.preventDefault(); startPlan(); } });
@@ -1431,8 +1544,9 @@ SCREENS.progress = function (heatMode = 'mistakes') {
   const known = masteredKeys(p, true);
 
   $('#app').innerHTML = `
-    <h1>Progress</h1>
-    <p class="muted" style="margin-top:6px">Speed and accuracy from passages, lesson checks, drills and speed tests.</p>
+    <div class="page-head"><div><h1>Progress</h1>
+      <p class="muted" style="margin-top:6px">Speed and accuracy from passages, lesson checks, drills and speed tests.</p></div>
+      <button class="btn ghost" id="go-report">📊 Weekly report card</button></div>
     <div class="stats four" style="margin-top:18px">
       <div class="stat"><div class="v">${recent.length ? Math.round(mean(recent.map(h => h.wpm))) : '–'}<small> WPM</small></div><div class="k">Typing speed, last 10 runs</div></div>
       <div class="stat"><div class="v">${recent.length ? fmtAcc(mean(recent.map(h => h.acc))) : '–'}</div><div class="k">Accuracy, last 10 runs</div></div>
@@ -1468,6 +1582,9 @@ SCREENS.progress = function (heatMode = 'mistakes') {
       </div>
       <div class="heat-box" id="heat"></div>
     </div>
+
+    <div class="section-title">Your fingers</div>
+    ${fingersSection(p)}
 
     <div class="section-title">Mix-ups</div>
     ${mixups.length ? `<div class="mix-list">${mixups.map(m => `<div class="card mix-card">
@@ -1510,10 +1627,160 @@ SCREENS.progress = function (heatMode = 'mistakes') {
   $('#speed-test').onclick = () => runSpeedTest('progress');
   $$('[data-mix]').forEach(b => b.onclick = () => runMixupDrill(b.dataset.mix, 'progress'));
   $('#all-badges').onclick = () => go('badges');
+  paintFingerHands(p);
+  $$('[data-finger]').forEach(b => b.onclick = () => runFingerDrill(b.dataset.finger, 'progress'));
+  $('#go-report').onclick = () => go('report');
   let t;
   const onResize = () => { clearTimeout(t); t = setTimeout(draw, 150); };
   window.addEventListener('resize', onResize);
   setCleanup(() => window.removeEventListener('resize', onResize));
+};
+
+// ── Weekly report card ─────────────────────────────────────────────────────
+// One week (Monday to Sunday) next to the week before it, with letter grades
+// for the four things that matter most while learning.
+const GRADE_COLORS = { A: 'var(--good)', B: 'var(--accent)', C: 'var(--f-m)', D: 'var(--fixed)', F: 'var(--bad)' };
+const grade = (v, cuts) => v == null ? null : ['A', 'B', 'C', 'D'].find((g, i) => v >= cuts[i]) || 'F';
+const diffKeys = (a, b) => {   // per-key [presses, misses] between two snapshots
+  const out = {};
+  for (const [k, [n, m]] of Object.entries(b || {})) {
+    const [n0, m0] = a?.[k] || [0, 0];
+    if (n + m - n0 - m0 > 0) out[k] = [n - n0, m - m0];
+  }
+  return out;
+};
+
+function weekReport(p, start) {
+  const DAY = 864e5;
+  const end = new Date(start); end.setDate(end.getDate() + 7);
+  const prevStart = new Date(start); prevStart.setDate(prevStart.getDate() - 7);
+  const between = (t, a, b) => t >= +a && t < +b;
+  const runs = p.history.filter(h => between(h.t, start, end));
+  const prev = p.history.filter(h => between(h.t, prevStart, start));
+  const trend = r => r.filter(countsForTrend);
+  const avg = (r, k) => r.length ? mean(r.map(h => h[k])) : null;
+  const mins = r => r.reduce((a, h) => a + h.ms, 0) / 60000;
+  const days = r => new Set(r.map(h => new Date(h.t).toDateString())).size;
+  const current = +end > Date.now();
+  const daysSoFar = current ? Math.max(1, Math.ceil((Date.now() - start) / DAY)) : 7;
+
+  // Keys and mix-ups: this week is the gap between this week's snapshot and the next.
+  const snap = d => p.snaps?.[d.toDateString()];
+  const nowSnap = { k: compactKeys(p), x: p.mixups };
+  const endSnap = snap(end) || (current ? nowSnap : null);
+  const thisKeys = snap(start) && endSnap ? diffKeys(snap(start).k, endSnap.k) : {};
+  const lastKeys = snap(prevStart) && snap(start) ? diffKeys(snap(prevStart).k, snap(start).k) : {};
+  const rate = ([n, m]) => m / Math.max(1, n + m);
+  const improved = Object.entries(thisKeys)
+    .filter(([k, s]) => k !== ' ' && s[0] + s[1] >= 30 && lastKeys[k] && lastKeys[k][0] + lastKeys[k][1] >= 30)
+    .map(([k, s]) => [k, rate(lastKeys[k]) - rate(s), rate(lastKeys[k]), rate(s)])
+    .filter(([, d]) => d > 0.005).sort((a, b) => b[1] - a[1])[0] || null;
+  let mixup = null;
+  if (snap(start) && endSnap) {
+    const gained = Object.entries(endSnap.x).map(([id, n]) => [id, n - (snap(start).x[id] || 0)]).filter(([, n]) => n >= 2).sort((a, b) => b[1] - a[1])[0];
+    if (gained) mixup = { ...mixupInfo(gained[0]), n: gained[1] };
+  }
+
+  // Lessons first passed this week.
+  const firstPass = {};
+  p.history.filter(h => h.kind === 'lesson' && h.step === 'check' && h.acc >= PASS_ACC).sort((a, b) => a.t - b.t)
+    .forEach(h => { firstPass[h.ref] ??= h.t; });
+  const lessons = Object.entries(firstPass).filter(([, t]) => between(t, start, end)).map(([id]) => lessonById(+id)).filter(Boolean);
+
+  const tw = trend(runs), lw = trend(prev);
+  const speed = avg(tw, 'wpm'), speedPrev = avg(lw, 'wpm');
+  const acc = avg(tw, 'acc'), accPrev = avg(lw, 'acc');
+  const best = tw.reduce((b, h) => (!b || h.wpm > b.wpm ? h : b), null);
+  const goalDays = (p.goalDays || []).filter(d => between(+new Date(d), start, end)).length;
+  const minutes = mins(runs), goalMin = goalMs(p) / 60000;
+  const speedChange = speed != null && speedPrev != null ? speed - speedPrev : null;
+
+  const grades = {
+    Consistency: { g: grade(days(runs) / daysSoFar, [6 / 7, 4 / 7, 3 / 7, 1 / 7]), why: `Practiced ${days(runs)} of ${daysSoFar} day${daysSoFar === 1 ? '' : 's'}` },
+    Effort: { g: grade(minutes / (goalMin * daysSoFar), [0.9, 0.65, 0.4, 0.15]), why: `${Math.round(minutes)} of ${goalMin * daysSoFar} goal minutes` },
+    Accuracy: { g: grade(acc, [97, 95, 92, 88]), why: acc == null ? 'No passages, checks or drills yet' : `${fmtAcc(acc)} on average` },
+    Speed: { g: grade(speedChange, [1.5, 0.3, -0.5, -2]), why: speedChange == null ? (speed == null ? 'No speed runs yet' : 'Nothing to compare with last week') : `${speedChange >= 0 ? '+' : '−'}${Math.abs(speedChange).toFixed(1)} WPM from last week` },
+  };
+
+  // A short note from the coach, picked from what stands out most.
+  const gs = Object.values(grades).map(x => x.g);
+  let note;
+  if (!runs.length) note = current ? 'A new week! A few minutes today gets it started.' : 'No practice this week. That happens. Today is a great day to start again.';
+  else if (gs.every(g => g === 'A')) note = 'Straight A\'s! Steady practice, clean typing and rising speed. Keep doing exactly this.';
+  else if (grades.Accuracy.g && 'DF'.includes(grades.Accuracy.g)) note = 'Speed can wait. Slow down until accuracy is back above 95%; that\'s what makes the speed stick.';
+  else if (grades.Consistency.g && 'DF'.includes(grades.Consistency.g)) note = 'Short and often beats long and rare. Try for a few minutes on more days this week.';
+  else if (speedChange != null && speedChange >= 1.5) note = `Up ${speedChange.toFixed(1)} WPM. Your fingers are learning the way. Keep your eyes on the screen.`;
+  else if (speedChange != null && speedChange < -0.5 && acc >= 95) note = 'Speed dipped a little, but accuracy held. That\'s normal on harder material; it comes back.';
+  else note = 'Solid week. Pick one trouble key or mix-up and give it a drill or two.';
+
+  return {
+    start, end, current, runs: runs.length, minutes, minutesPrev: mins(prev), days: days(runs), daysSoFar, goalDays,
+    speed, speedPrev, acc, accPrev, best, improved, mixup, lessons,
+    passages: new Set(runs.filter(h => h.kind === 'passage').map(h => h.ref)).size,
+    games: runs.filter(h => h.kind === 'game').length,
+    badges: BADGES.filter(b => between(p.badges[b.id] || 0, start, end)),
+    grades, note,
+  };
+}
+
+// The last finished week, if anything happened in it or the week before.
+const lastWeekStart = () => { const d = weekStart(Date.now()); d.setDate(d.getDate() - 7); return d; };
+function reportReady(p) {
+  const s = lastWeekStart();
+  return p.reportSeen !== s.toDateString()
+    && p.history.some(h => h.t >= +s && h.t < +weekStart(Date.now()));
+}
+
+SCREENS.report = function (startKey) {
+  const p = me();
+  const start = startKey ? new Date(startKey) : (p.history.some(h => h.t >= +lastWeekStart() && h.t < +weekStart(Date.now())) ? lastWeekStart() : weekStart(Date.now()));
+  if (start.toDateString() === lastWeekStart().toDateString()) p.reportSeen = start.toDateString();
+  p.reportsOpened = (p.reportsOpened || 0) + 1;
+  const r = weekReport(p, start);
+  if (Object.values(r.grades).every(x => x.g === 'A') && !p.straightAs) p.straightAs = Date.now();
+  newBadges(p); save();
+  // Weeks to choose from: this one and up to 7 before it that had practice.
+  const weeks = [];
+  for (let i = 0; i < 8; i++) {
+    const s = weekStart(Date.now()); s.setDate(s.getDate() - 7 * i);
+    const e = new Date(s); e.setDate(e.getDate() + 7);
+    if (i === 0 || p.history.some(h => h.t >= +s && h.t < +e)) weeks.push([s, i === 0 ? 'This week' : i === 1 ? 'Last week' : `Week of ${s.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`]);
+  }
+  const range = `${r.start.toLocaleDateString(undefined, { month: 'long', day: 'numeric' })} to ${new Date(+r.end - 1).toLocaleDateString(undefined, { month: 'long', day: 'numeric' })}`;
+  const change = (now, before, unit, digits = 0) => now == null ? '' : before == null ? '' : (() => {
+    const d = now - before;
+    return Math.abs(d) < 10 ** -digits / 2 ? '<span class="muted small">same as last week</span>'
+      : `<span class="small ${d > 0 ? 'up' : 'down'}">${d > 0 ? '▲' : '▼'} ${Math.abs(d).toFixed(digits)}${unit} vs last week</span>`;
+  })();
+  const accChange = r.acc != null && r.accPrev != null ? (() => { const d = r.acc - r.accPrev; return Math.abs(d) < 0.05 ? '<span class="muted small">same as last week</span>' : `<span class="small ${d > 0 ? 'up' : 'down'}">${d > 0 ? '▲' : '▼'} ${Math.abs(d).toFixed(1)} points vs last week</span>`; })() : '';
+
+  $('#app').innerHTML = `
+    <button class="back" id="r-back">← Progress</button>
+    <div class="page-head"><div><h1>Weekly report card</h1>
+      <p class="muted" style="margin-top:6px">${esc(range)}${r.current ? ' · so far' : ''}</p></div></div>
+    <div class="chips">${weeks.map(([s, label]) => `<button class="chip ${s.toDateString() === start.toDateString() ? 'on' : ''}" data-week="${esc(s.toDateString())}">${esc(label)}</button>`).join('')}</div>
+    <div class="card coach-note"><span class="ic">📝</span><p>${esc(r.note)}</p></div>
+    <div class="grades">${Object.entries(r.grades).map(([name, x]) => `<div class="grade-tile">
+      <span class="g" style="color:${x.g ? GRADE_COLORS[x.g] : 'var(--muted)'}">${x.g || '–'}</span>
+      <b>${name}</b><span class="muted small">${esc(x.why)}</span></div>`).join('')}</div>
+    <div class="stats four" style="margin-top:14px">
+      <div class="stat"><div class="v">${Math.round(r.minutes)}<small> min</small></div><div class="k">Practice · ${change(r.minutes, r.minutesPrev, ' min')}</div></div>
+      <div class="stat"><div class="v">${r.speed == null ? '–' : Math.round(r.speed)}<small> WPM</small></div><div class="k">Average speed · ${change(r.speed, r.speedPrev, ' WPM', 1)}</div></div>
+      <div class="stat"><div class="v">${r.acc == null ? '–' : fmtAcc(r.acc)}</div><div class="k">Average accuracy · ${accChange}</div></div>
+      <div class="stat"><div class="v">${r.goalDays}<small> / ${r.daysSoFar}</small></div><div class="k">Days you hit your goal</div></div>
+    </div>
+    <div class="section-title">Highlights</div>
+    <div class="highlights">
+      ${r.best ? `<div class="card hl"><span class="ic">🏁</span><div><b>Fastest run: ${Math.round(r.best.wpm)} WPM</b><p class="muted small">${esc(runTitle(r.best))} at ${fmtAcc(r.best.acc)}</p></div></div>` : ''}
+      ${r.improved ? `<div class="card hl"><span class="ic">📉</span><div><b>Most improved key: <span class="keycap sm">${esc(keyName(r.improved[0]))}</span></b><p class="muted small">Misses went from ${(r.improved[2] * 100).toFixed(1)}% to ${(r.improved[3] * 100).toFixed(1)}%</p></div></div>` : ''}
+      ${r.mixup ? `<div class="card hl"><span class="ic">🔀</span><div><b>Trickiest mix-up: ${esc(r.mixup.title)} (×${r.mixup.n})</b><p class="muted small">${esc(r.mixup.tip)}</p></div><button class="btn ghost" id="r-mix">Drill it</button></div>` : ''}
+      ${r.lessons.length ? `<div class="card hl"><span class="ic">🎓</span><div><b>Lesson${r.lessons.length === 1 ? '' : 's'} passed: ${r.lessons.map(l => esc(l.title)).join(', ')}</b></div></div>` : ''}
+      <div class="card hl"><span class="ic">📚</span><div><b>${r.passages} passage${r.passages === 1 ? '' : 's'} · ${r.games} game${r.games === 1 ? '' : 's'} · ${r.runs} run${r.runs === 1 ? '' : 's'} in all</b></div></div>
+      ${r.badges.length ? `<div class="card hl"><span class="ic">🏅</span><div><b>${r.badges.length} badge${r.badges.length === 1 ? '' : 's'} earned</b><p class="muted small">${r.badges.slice(0, 8).map(b => `${b.icon} ${esc(b.name)}`).join(' · ')}${r.badges.length > 8 ? ' …' : ''}</p></div></div>` : ''}
+    </div>`;
+  $('#r-back').onclick = () => go('progress');
+  $$('[data-week]').forEach(b => b.onclick = () => go('report', b.dataset.week));
+  $('#r-mix') && ($('#r-mix').onclick = () => runMixupDrill(r.mixup.id, 'progress'));
 };
 
 function badgeTile(b) {
@@ -1758,7 +2025,8 @@ function buildPlan(p) {
     add('passage', ps.id, ps.title, mins(ps.text.length));
   }
   if (!open.length && p.introDone && total() + gameMins < goalMin) add('review', 'review', 'Word practice', mins(180));
-  const game = new Date().getDate() % 2 ? 'fairway' : 'twominute';   // alternate by day
+  const rotation = ['fairway', 'twominute', 'putt'];   // a different game each day
+  const game = rotation[Math.floor((Date.now() - new Date().getTimezoneOffset() * 6e4) / 864e5) % rotation.length];
   add('game', game, GAMES[game].title, gameMins);
   return { day: todayKey(), steps, started: false };
 }

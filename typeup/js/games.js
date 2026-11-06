@@ -9,6 +9,8 @@ const GAMES = {
     desc: 'Words fall like golf balls toward the pond. Type each one before it splashes. You have 3 balls, and the pace picks up as you go.' },
   twominute: { title: 'Two-Minute Drill', icon: '🏈', color: '#b07cff', tag: 'Vikings · Speed and accuracy', unit: 'Points',
     desc: 'Two minutes on the clock, ball on your own 25. Type each play to move downfield. Faster plays gain more yards, and every mistake is a penalty.' },
+  putt: { title: 'Putt Out', icon: '🏌️', color: '#ffd166', tag: 'Golf · Smooth and steady', unit: 'Strokes', lower: true,
+    desc: 'Nine holes on the putting green. Type each putt cleanly and at your pace to drain it. Slips lip out, slow putts come up short. Par is 18.' },
 };
 
 const PLAYS = [
@@ -30,13 +32,16 @@ const recentWpm = p => { const r = p.history.filter(countsForTrend).slice(-10); 
 function gameOver(id, { score, wpm, acc, ms, chars, lines }) {
   const p = me();
   const g = p.games[id] || (p.games[id] = { best: 0, plays: 0 });
-  const isBest = g.plays > 0 && score > g.best;
-  g.plays++; g.best = Math.max(g.best, score);
+  const lower = GAMES[id].lower;   // golf scoring: fewer strokes is better
+  const better = lower ? score < g.best : score > g.best;
+  const isBest = g.plays > 0 && better;
+  g.best = g.plays === 0 || better ? score : g.best;
+  g.plays++;
   if (ms > 3000 && chars > 0) recordRun(p, { kind: 'game', ref: id, wpm, acc, ms, chars });
   else save();
   if (isBest) Sound.pass(); else Sound.done();
   const plan = planResult([{ label: 'Play again', action: () => go(id) }, { label: 'All games', action: () => go('games') }]);
-  openModal(`<h2>${isBest ? 'New high score! 🎉' : 'Game over'}</h2>
+  openModal(`<h2>${isBest ? (lower ? 'New best round! 🎉' : 'New high score! 🎉') : lower ? 'Round complete' : 'Game over'}</h2>
     ${plan.banner}
     <div class="big-stats">
       <div class="stat"><div class="v">${score}</div><div class="k">${GAMES[id].unit}</div></div>
@@ -45,7 +50,7 @@ function gameOver(id, { score, wpm, acc, ms, chars, lines }) {
     </div>
     ${lines ? `<p class="muted" style="margin-bottom:14px">${esc(lines)}</p>` : ''}
     ${celebrations(p)}
-    <p class="compare">High score: <b>${g.best}</b> · ${g.plays} game${g.plays === 1 ? '' : 's'} played</p>`,
+    <p class="compare">${lower ? 'Best round' : 'High score'}: <b>${g.best}</b> · ${g.plays} game${g.plays === 1 ? '' : 's'} played</p>`,
     plan.buttons);
 }
 
@@ -75,7 +80,7 @@ SCREENS.games = function () {
         <div class="app-tag">${esc(g.tag)}</div>
         <h2>${esc(g.title)}</h2>
         <p class="muted">${esc(g.desc)}</p>
-        <div class="game-foot"><span class="muted small">${rec ? `High score ${rec.best} · ${rec.plays} played` : 'Not played yet'}</span>
+        <div class="game-foot"><span class="muted small">${rec ? `${g.lower ? 'Best round' : 'High score'} ${rec.best} · ${rec.plays} played` : 'Not played yet'}</span>
         <button class="btn" data-play="${id}" style="background:${g.color}">Play →</button></div>
       </div>`;
     }).join('')}</div>`;
@@ -317,5 +322,134 @@ SCREENS.twominute = function () {
     }
     log(gain >= 15 ? `💨 Big play! Gain of ${gain}` : `Gain of ${gain}${playErrors ? '' : ' · clean play +3'}`, gain >= 15 ? 'big' : '');
     paintField(); nextPlay();
+  });
+};
+
+// ── Putt Out ───────────────────────────────────────────────────────────────
+// Nine holes, par 2 each. Longer putts mean more to type. A clean putt at
+// your usual pace drops; clean but slow comes up short; a slip lips out.
+// Either way the next putt is a short one, and a clean one holes it.
+SCREENS.putt = function () {
+  const p = me();
+  const { words } = gameWords(p);
+  const short = words.filter(w => w.length <= 4);
+  const cpm = Math.max(40, recentWpm(p) * 5);   // your usual characters per minute
+  const HOLES = 9, PAR = 2;
+  const body = gameShell('putt', 'Type each putt cleanly, at your usual pace', [['hole', 'Hole', `1/${HOLES}`], ['topar', 'To par', 'E'], ['strokes', 'Strokes', 0]]);
+  body.innerHTML = `
+    <div class="pt-green" id="pt-green">
+      <div class="pt-fringe"></div>
+      <div class="pt-cup" id="pt-cup"><span class="pt-flag">⛳</span></div>
+      <div class="pt-ball" id="pt-ball"></div>
+      <div class="pt-dist" id="pt-dist"></div>
+    </div>
+    <div class="tm-call" id="pt-call"></div>
+    <div class="textbox tm-box"><div class="inner" id="pt-text"></div></div>
+    <div class="tm-log" id="pt-log"></div>
+    <div class="pt-card" id="pt-card"></div>`;
+
+  const card = [];            // strokes per hole
+  let hole = 0, putt = 0, feet = 0, text = '', pos = 0, errors = 0, puttStart = 0;
+  let strokes = 0, keystrokes = 0, correct = 0, chars = 0, firstKey = 0, onePutts = 0, busy = false, over = false;
+  const timers = [];
+  const later = (fn, ms) => timers.push(setTimeout(() => { if (!over) fn(); }, ms));
+  setCleanup(() => { over = true; timers.forEach(clearTimeout); });
+
+  const toPar = () => { const d = strokes - PAR * card.length; return d === 0 ? 'E' : d > 0 ? `+${d}` : `−${-d}`; };
+  const paintCard = () => {
+    $('#pt-card').innerHTML = Array.from({ length: HOLES }, (_, i) => {
+      const s = card[i];
+      const cls = s == null ? '' : s < PAR ? 'birdie' : s > PAR ? 'bogey' : 'par';
+      return `<div class="pt-hole ${cls} ${i === hole && s == null ? 'now' : ''}"><span>${i + 1}</span><b>${s ?? '·'}</b></div>`;
+    }).join('') + `<div class="pt-hole total"><span>Tot</span><b>${strokes}</b></div>`;
+    $('#g-hole').textContent = `${Math.min(hole + 1, HOLES)}/${HOLES}`;
+    $('#g-topar').textContent = toPar();
+    $('#g-strokes').textContent = strokes;
+  };
+  const paintText = () => {
+    $('#pt-text').innerHTML = [...text].map((c, i) => `<span class="ch${c === ' ' ? ' sp' : ''}${i < pos ? ' ok' : ''}${i === pos ? ' cur' : ''}">${esc(c)}</span>`).join('');
+  };
+  // The ball travels from the left toward the cup as you type.
+  const ballAt = frac => { $('#pt-ball').style.left = `calc(10% + ${Math.min(1, frac) * 74}%)`; };
+  const log = (msg, cls = '') => { $('#pt-log').innerHTML = `<span class="${cls}">${esc(msg)}</span>`; };
+
+  const setPutt = (len, label) => {
+    putt++; pos = 0; errors = 0; puttStart = 0;
+    const pool = len <= 5 && short.length >= 4 ? short : words;
+    const parts = [];
+    do parts.push(pick(pool)); while (parts.join(' ').length < len);
+    text = parts.join(' ');
+    $('#pt-call').textContent = label;
+    $('#pt-dist').textContent = `${feet} ft`;
+    paintText();
+  };
+  const startHole = () => {
+    putt = 0;
+    feet = 3 + Math.floor(Math.random() * 33);             // 3 to 35 feet
+    ballAt(0); $('#pt-ball').className = 'pt-ball';
+    log('');
+    setPutt(4 + Math.round(feet * 0.5), `Hole ${hole + 1} · ${feet} feet · read it, then type the putt`);
+    paintCard();
+  };
+  const finishHole = (n, msg, cls) => {
+    card.push(n); strokes += n;
+    if (n === 1) onePutts++;
+    log(msg, cls);
+    paintCard();
+    busy = true;
+    later(() => {
+      busy = false;
+      hole++;
+      if (hole < HOLES) return startHole();
+      over = true;
+      const ms = firstKey ? performance.now() - firstKey : 0;
+      const d = strokes - PAR * HOLES;
+      gameOver('putt', { score: strokes, ms, chars, wpm: ms > 1500 ? (chars / 5) / (ms / 60000) : 0, acc: keystrokes ? correct / keystrokes * 100 : 100,
+        lines: `You shot ${strokes} (${d === 0 ? 'even par' : d > 0 ? `${d} over par` : `${-d} under par`}) with ${onePutts} one-putt${onePutts === 1 ? '' : 's'}.` });
+    }, 1400);
+  };
+
+  startHole();
+  setKeyHandler(e => {
+    if (over || busy || e.ctrlKey || e.altKey || e.metaKey) return;
+    if (e.key.length !== 1) return;
+    e.preventDefault();
+    if (e.repeat) return;
+    const now = performance.now();
+    if (!firstKey) firstKey = now;
+    if (!puttStart) puttStart = now;
+    keystrokes++;
+    if (e.key !== text[pos]) {
+      errors++;
+      Sound.error();
+      $('#pt-ball').classList.remove('wobble'); void $('#pt-ball').offsetWidth; $('#pt-ball').classList.add('wobble');
+      return;
+    }
+    correct++; pos++;
+    Sound.click();
+    paintText();
+    if (putt === 1) ballAt(pos / text.length * 0.96);
+    if (pos < text.length) return;
+    chars += text.length + 1;
+
+    if (putt === 1) {
+      const target = text.length / cpm * 60000;
+      const onPace = now - puttStart <= target * 1.25;
+      if (!errors && onPace) {
+        ballAt(1); $('#pt-ball').classList.add('drop');
+        Sound.tone(880, 0.12, { gain: 0.05 }); Sound.tone(1320, 0.2, { at: 0.1, gain: 0.05 });
+        return finishHole(1, feet >= 20 ? `🎯 Drained it from ${feet} feet!` : '🎯 In the hole! One putt.', 'td');
+      }
+      feet = errors ? 2 + Math.min(4, errors) : 2;
+      ballAt(errors ? 0.88 : 0.82);
+      log(errors ? `Lipped out! ${feet} feet coming back.` : `Good line, but short. ${feet} feet left.`, 'flag');
+      busy = true;
+      return later(() => { busy = false; setPutt(feet <= 3 ? 2 : 5, `Hole ${hole + 1} · ${feet} feet for ${putt === 1 ? 'par' : 'bogey'}`); }, 900);
+    }
+    // Second putt: clean holes it; a slip means one more tap-in.
+    ballAt(1); $('#pt-ball').classList.add('drop');
+    if (!errors) { Sound.tone(880, 0.12, { gain: 0.04 }); return finishHole(2, 'Par. Nicely done.', ''); }
+    Sound.error();
+    return finishHole(3, 'Missed it, tapped in for bogey.', 'flag');
   });
 };
