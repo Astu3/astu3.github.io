@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TypeUp</title>
+<meta name="description" content="Learn to touch type while reading about AI, the Minnesota Vikings, golf, and patience.">
+<meta name="theme-color" content="#0d1020">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="manifest" href="manifest.json">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+
+<header class="topbar" id="topbar" hidden>
+  <button class="brand" data-go="home" aria-label="TypeUp home"><img src="icon.svg" alt=""><span>Type<b>Up</b></span></button>
+  <nav class="tabs" aria-label="Sections">
+    <button data-go="home">Home</button>
+    <button data-go="lessons">Lessons</button>
+    <button data-go="passages">Passages</button>
+    <button data-go="games">Games</button>
+    <button data-go="progress">Progress</button>
+  </nav>
+  <div class="who">
+    <button class="icon-btn" id="btn-sound" aria-label="Sound">🔊</button>
+    <button class="icon-btn" id="btn-settings" aria-label="Settings" title="Settings">⚙</button>
+    <button class="me" id="btn-me" title="Switch person"></button>
+  </div>
+</header>
+
+<main id="app"></main>
+
+<div class="touch-note" id="touch-note" hidden>TypeUp needs a real keyboard. It works best on a computer.</div>
+
+<script src="js/lessons.js"></script>
+<script src="js/passages.js"></script>
+<script src="js/badges.js"></script>
+<script src="js/app.js"></script>
+<script src="js/games.js"></script>
+</body>
+</html>

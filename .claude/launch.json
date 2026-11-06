@@ -66,6 +66,17 @@
         "roadtrip-game"
       ],
       "port": 3017
+    },
+    {
+      "name": "TypeUp",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": [
+        "serve",
+        "-p",
+        "3018",
+        "typeup"
+      ],
+      "port": 3018
     }
   ]
 }
