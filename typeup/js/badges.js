@@ -7,7 +7,7 @@
 // Loaded before app.js; the app's helpers are only called once it's running.
 // ═══════════════════════════════════════════════════════════════════════════
 
-const BADGES_VERSION = 3;
+const BADGES_VERSION = 4;
 
 const BADGE_GROUPS = {
   lessons:  'Lessons',
@@ -17,6 +17,7 @@ const BADGE_GROUPS = {
   passages: 'Passages',
   games:    'Games',
   coaching: 'Coaching',
+  wolf:     'Your wolf',
   fun:      'Just for fun',
 };
 
@@ -171,6 +172,15 @@ const BADGES = [
   { id: 'eyes', group: 'coaching', icon: '👀', name: 'No peeking', how: 'Know all 26 letters well enough that the guide fades them', test: c => allLetters.every(k => c.mastered.has(k)) },
   { id: 'digits', group: 'coaching', icon: '🧮', name: 'Numbers by feel', how: 'Know every number key well enough that the guide fades it', test: c => [...'1234567890'].every(k => c.mastered.has(k)) },
   { id: 'know40', group: 'coaching', icon: '🎹', name: 'Whole keyboard', how: 'Know 40 keys well enough that the guide fades them', test: c => c.mastered.size >= 40 },
+
+  // ── Your wolf ──────────────────────────────────────────────────────────
+  { id: 'wolfeyes', group: 'wolf', icon: '👁️', name: 'Eyes open', how: 'Your wolf pup opens its eyes (level 2)', test: c => wolfStage(c.p) >= 1 },
+  { id: 'wolfyear', group: 'wolf', icon: '🐾', name: 'Yearling', how: 'Raise your wolf into a Yearling (level 9)', test: c => wolfStage(c.p) >= 8 },
+  { id: 'wolfpack', group: 'wolf', icon: '🐺', name: 'Part of the pack', how: 'Raise your wolf into a Pack wolf (level 18)', test: c => wolfStage(c.p) >= 13 },
+  { id: 'wolfalpha', group: 'wolf', icon: '🌌', name: 'Alpha', how: 'Raise your wolf into an Alpha (level 32)', test: c => wolfStage(c.p) >= WOLF_ALPHA },
+  { id: 'wolflegend', group: 'wolf', icon: '✨', name: 'Legend of the North', how: 'Raise your wolf into a Legend of the North (level 36)', test: c => wolfStage(c.p) >= WOLF_LEGEND },
+  { id: 'wolfdress', group: 'wolf', icon: '🎽', name: 'Dressed up', how: 'Put some gear on your wolf in the den', test: c => Object.keys(c.p.wolf?.gear || {}).length > 0 },
+  { id: 'wolfscene', group: 'wolf', icon: '🏕️', name: 'New scenery', how: 'Take your wolf somewhere new from the den', test: c => !!c.p.wolf && c.p.wolf.scene !== 'den' },
 
   // ── Just for fun ───────────────────────────────────────────────────────
   { id: 'early', group: 'fun', icon: '🌅', name: 'Early bird', how: 'Practice before 7 in the morning', test: c => c.atHour(4, 7) },

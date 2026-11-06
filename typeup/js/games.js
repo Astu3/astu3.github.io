@@ -48,6 +48,7 @@ function gameOver(id, { score, wpm, acc, ms, chars, lines }) {
       <div class="stat"><div class="v">${Math.round(wpm)}</div><div class="k">Words per minute</div></div>
       <div class="stat"><div class="v">${fmtAcc(acc)}</div><div class="k">Accuracy</div></div>
     </div>
+    ${wolfReact(p, isBest ? 'great' : 'good')}
     ${lines ? `<p class="muted" style="margin-bottom:14px">${esc(lines)}</p>` : ''}
     ${celebrations(p)}
     <p class="compare">${lower ? 'Best round' : 'High score'}: <b>${g.best}</b> · ${g.plays} game${g.plays === 1 ? '' : 's'} played</p>`,

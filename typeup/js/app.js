@@ -117,7 +117,7 @@ function newProfile(name, avatar) {
     color: COLORS[state.profiles.length % COLORS.length],
     created: Date.now(),
     introDone: false,
-    settings: { guide: 'full', errorMode: 'stop', goal: 10, sound: true, fade: true, ghost: true },
+    settings: { guide: 'full', errorMode: 'stop', goal: 10, sound: true, fade: true, ghost: true, wolfTyping: true },
     games: {},      // id -> { best, plays }
     lessons: {},    // id -> { passed, bestAcc, bestWpm, attempts }
     passages: {},   // id -> { bestWpm, bestAcc, runs }
@@ -134,6 +134,7 @@ function newProfile(name, avatar) {
     ghostWins: 0,   // passages where you beat your own best run
     snaps: {},      // week start -> { k: key totals, x: mix-up totals } when that week began
     reportSeen: null, // the last weekly report opened, so Home stops announcing it
+    wolf: { name: 'Timber', gear: {}, scene: 'den', stageSeen: 0 },   // your timberwolf
     msBank: 0,      // practice time from old runs trimmed out of history
   };
 }
@@ -166,6 +167,15 @@ function normalizeProfile(p) {
   if (!p.snaps || typeof p.snaps !== 'object') p.snaps = {};
   for (const [wk, s] of Object.entries(p.snaps)) if (!s || typeof s.k !== 'object' || typeof s.x !== 'object') delete p.snaps[wk];
   if (typeof p.reportSeen !== 'string') p.reportSeen = null;
+  // The wolf: a profile from before wolves arrive starts at its current stage,
+  // so it isn't greeted with a run of "your wolf grew" announcements.
+  const w = p.wolf && typeof p.wolf === 'object' ? p.wolf : { stageSeen: wolfStageFor(levelInfo(p).n) };
+  p.wolf = {
+    name: typeof w.name === 'string' && w.name.trim() ? w.name.trim().slice(0, 20) : 'Timber',
+    gear: Object.fromEntries(Object.entries(WOLF_GEAR).map(([slot, items]) => [slot, items.some(i => i.id === w.gear?.[slot]) ? w.gear[slot] : null]).filter(([, v]) => v)),
+    scene: WOLF_SCENES.some(s => s.id === w.scene) ? w.scene : 'den',
+    stageSeen: num(w.stageSeen) ? w.stageSeen : 0,
+  };
   p.goalDays = Array.isArray(p.goalDays) ? p.goalDays.filter(d => typeof d === 'string')
     : [...dayTotals(p).entries()].filter(([, ms]) => ms >= goalMs(p)).map(([d]) => d);
   if (!p.mixups || typeof p.mixups !== 'object') p.mixups = {};
@@ -525,6 +535,19 @@ function startTyping(opts) {
   let capsOn = false, deadKey = false, stuck = false, stuckTimer = 0;
   const HESITATE = 1500;
 
+  // Your wolf keeps you company in the corner: focused while you type, a
+  // wince at a slip, a cheer every 20 clean keys, and a nap if you stop.
+  const buddy = p.settings.wolfTyping !== false ? document.createElement('div') : null;
+  let wolfMood = '', moodTimer = 0, napTimer = 0, cleanRun = 0;
+  const setMood = (m, ms) => {
+    if (!buddy) return;
+    if (m !== wolfMood) { buddy.innerHTML = myWolf(p, m, { scene: false }); wolfMood = m; }
+    clearTimeout(moodTimer);
+    if (ms) moodTimer = setTimeout(() => setMood('focus'), ms);
+  };
+  const awake = () => { clearTimeout(napTimer); napTimer = setTimeout(() => setMood('sleepy'), 6000); };
+  if (buddy) { buddy.className = 'wolf-buddy'; buddy.title = p.wolf.name; app.appendChild(buddy); setMood('happy'); }
+
   const paint = i => {
     const sp = spans[i];
     if (!sp) return;
@@ -594,7 +617,7 @@ function startTyping(opts) {
   window.addEventListener('resize', onResize);
   let reported = false, pending = null;
   setCleanup(() => {
-    clearInterval(timer); clearTimeout(stuckTimer); window.removeEventListener('resize', onResize);
+    clearInterval(timer); clearTimeout(stuckTimer); clearTimeout(moodTimer); clearTimeout(napTimer); window.removeEventListener('resize', onResize);
     if (pending) { clearTimeout(pending); pending = null; report(false); celebrateFrom = null; planMoved = false; }   // left during the pause: still save the run
   });
 
@@ -608,6 +631,7 @@ function startTyping(opts) {
       misses: session.misses, lat: session.lat, wrongs: session.wrongs, times: session.times,
     };
     recordKeys(p, session);
+    clearTimeout(napTimer); setMood('excited');
     if (opts.finishSound !== false) Sound.done();
     // A short pause so the last letter shows before the results appear.
     pending = setTimeout(() => { pending = null; report(true); }, 250);
@@ -639,6 +663,10 @@ function startTyping(opts) {
     $('#t-box').classList.remove('idle');
     if (r.ok) { guide.press(e.key); if (!session.done) Sound.click(); }
     else { guide.wrong(e.key); Sound.error(); }
+    if (r.ok && ++cleanRun % 20 === 0) setMood('excited', 900);
+    else if (!r.ok) { cleanRun = 0; setMood('oops', 700); }
+    else if (wolfMood !== 'excited' && wolfMood !== 'oops') setMood('focus');
+    awake();
     paint(before); paint(session.pos);
     if (session.pos !== before) scroll();
     showHint(); live();
@@ -743,6 +771,7 @@ function celebrations(p) {
   if (badges.length) save();
   let html = badges.slice(0, 3).map(b => `<div class="verdict badge">🏅 New badge: ${b.icon} <b>${esc(b.name)}</b> · ${esc(b.how)}</div>`).join('')
     + (badges.length > 3 ? `<div class="verdict badge">🏅 …and ${badges.length - 3} more. See them all under Progress → Badges.</div>` : '');
+  html = wolfNews(p, badges.map(b => b.id)) + html;
   if (!celebrateFrom) return html;
   const from = celebrateFrom;
   celebrateFrom = null;
@@ -1007,6 +1036,7 @@ function showResults({ title, result, same, verdict = '', buttons }) {
     .map(([ch, [t, n]]) => [ch, t / n]).sort((a, b) => b[1] - a[1]).slice(0, 4);
   const chip = ch => `<span class="keycap sm ${fingerClass(FINGER_OF[keyFor(ch).key] || 'th')}" style="--kc:var(--fc)">${esc(keyLabel(ch))}</span>`;
   const plan = planResult(buttons);
+  const cheer = celebrations(p);
   const mix = {};
   for (const [pair, n] of Object.entries(result.wrongs || {})) { const id = mixupId(...pair); if (id) mix[id] = (mix[id] || 0) + n; }
   const mixes = Object.entries(mix).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([id, n]) => ({ ...mixupInfo(id), n }));
@@ -1022,9 +1052,10 @@ function showResults({ title, result, same, verdict = '', buttons }) {
       <div class="stat"><div class="v">${fmtAcc(result.acc)}</div><div class="k">Accuracy</div></div>
       <div class="stat"><div class="v">${fmtTime(result.ms)}</div><div class="k">Time</div></div>
     </div>
+    ${wolfReact(p, cheer || /🎉/.test(title) || /verdict pass/.test(verdict) ? 'great' : /verdict fail/.test(verdict) || result.acc < 90 ? 'tough' : 'good')}
     ${plan.banner}
     ${verdict}
-    ${celebrations(p)}
+    ${cheer}
     ${missed.length ? `<div class="key-list"><span class="lbl">Missed most</span>${missed.map(([c, n]) => `${chip(c)}<span class="cnt">×${n}</span>`).join('')}</div>`
       : '<div class="key-list"><span class="lbl">Missed most</span><span class="muted small">Nothing. Clean run!</span></div>'}
     ${mixes.length ? `<div class="key-list"><span class="lbl">Mixed up</span>${mixes.map(m => `<span class="mix" title="${esc(m.tip)}">${esc(m.title)}</span><span class="cnt">×${m.n}</span>`).join('')}</div>` : ''}
@@ -1087,6 +1118,7 @@ function go(screen, ...args) {
     $('#btn-me').innerHTML = `<span class="av" style="--c:${p.color}">${p.avatar}</span>${esc(p.name)}${streak ? `<span class="streak" title="${streak}-day streak">🔥${streak}</span>` : ''}`;
     const tab = { home: 'home', lessons: 'lessons', lesson: 'lessons', intro: 'lessons', passages: 'passages', progress: 'progress', badges: 'progress', report: 'progress', games: 'games', fairway: 'games', twominute: 'games', putt: 'games' }[screen];
     $$('.tabs button').forEach(b => b.classList.toggle('on', b.dataset.go === tab));
+    $('.who [data-go="den"]').classList.toggle('on', screen === 'den');
     paintSoundBtn();
   }
   window.scrollTo(0, 0);
@@ -1120,6 +1152,10 @@ const SCREENS = {
         <input type="text" id="pname" maxlength="20" autocomplete="off" required>
         <label>Pick a picture</label>
         <div class="emoji-grid">${AVATARS.map(a => `<button type="button" data-a="${a}" class="${a === avatar ? 'on' : ''}">${a}</button>`).join('')}</div>
+        <div class="new-pup">${wolfSVG({ stage: 0, scene: 'den' })}<div>
+          <label for="wname" style="margin-top:0">Name your wolf pup</label>
+          <input type="text" id="wname" maxlength="20" autocomplete="off" placeholder="Timber">
+          <p class="muted small" style="margin-top:6px;line-height:1.45">A newborn timberwolf comes home with you. It grows a little every time you level up.</p></div></div>
         <div class="btn-row" style="margin-top:20px">
           <button class="btn" type="submit">Start typing</button>
           ${state.profiles.length ? '<button class="btn ghost" type="button" id="cancel">Cancel</button>' : ''}
@@ -1138,6 +1174,7 @@ const SCREENS = {
       const name = $('#pname').value.trim();
       if (!name) return;
       const p = newProfile(name, avatar);
+      p.wolf.name = $('#wname').value.trim().slice(0, 20) || 'Timber';
       state.profiles.push(p);
       state.current = p.id;
       save();
@@ -1201,13 +1238,22 @@ const SCREENS = {
         <button class="btn warm" id="go-drill">Practice them →</button></div>` : ''}
       ${backupDue() ? `<div class="card weak-card backup-card" style="margin-top:16px"><div><p><b>💾 Back up your progress.</b> It's saved only in this browser${state.lastBackup ? `, and the last backup was ${esc(fmtDay(state.lastBackup).toLowerCase())}` : ''}.</p></div>
         <button class="btn ghost" id="go-backup">Save a backup file</button></div>` : ''}
-      <div class="section-title">Tip</div>
-      <div class="card tip-card"><span class="ic">💡</span><p>${esc(pick(TIPS))}</p></div>
+      <div class="section-title">Your wolf</div>
+      <div class="card wolf-card" id="go-den" role="button" tabindex="0" aria-label="Visit ${esc(p.wolf.name)}'s den">
+        <div class="wolf-pic">${myWolf(p, wolfHomeMood(p))}</div>
+        <div class="wolf-info">
+          <div class="bubble big">${esc(wolfLine(p))}</div>
+          <b>${esc(p.wolf.name)}</b> <span class="muted small">· ${esc(WOLF_STAGES[wolfStage(p)].name)}${WOLF_STAGES[wolfStage(p) + 1] ? ` · grows at level ${WOLF_STAGES[wolfStage(p) + 1].level}` : ''}</span>
+          <div><span class="link-btn" style="margin-top:8px;display:inline-block">Visit the den →</span></div>
+        </div>
+      </div>
       ${runs.length ? `<div class="section-title">Recent</div><div class="recent">${runs.slice(-6).reverse().map(h => `
         <div class="recent-row"><span class="t">${esc(runTitle(h))}</span>
         <span class="n">${Math.round(h.wpm)} WPM · ${fmtAcc(h.acc)}</span><span class="muted small">${fmtDay(h.t)}</span></div>`).join('')}</div>` : ''}`;
     $('#go-next').onclick = next.go;
     $('#go-plan').onclick = startPlan;
+    $('#go-den').onclick = () => go('den');
+    $('#go-den').onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go('den'); } };
     $('#go-report') && ($('#go-report').onclick = () => go('report'));
     $('#go-drill') && ($('#go-drill').onclick = () => runDrill('home'));
     $('#go-backup') && ($('#go-backup').onclick = () => { backupNow(); go('home'); });
@@ -1634,6 +1680,113 @@ SCREENS.progress = function (heatMode = 'mistakes') {
   const onResize = () => { clearTimeout(t); t = setTimeout(draw, 150); };
   window.addEventListener('resize', onResize);
   setCleanup(() => window.removeEventListener('resize', onResize));
+};
+
+// ── Your wolf ──────────────────────────────────────────────────────────────
+// Each person raises a timberwolf (drawn in wolf.js). It grows with your
+// level, wears gear your badges unlock, and reacts to how practice goes.
+const wolfStage = p => wolfStageFor(levelInfo(p).n);
+const itemUnlocked = (p, item) => !item.badge || !!p.badges[item.badge];
+const sceneUnlocked = (p, sc) => itemUnlocked(p, sc) && (sc.stage == null || wolfStage(p) >= sc.stage);
+const badgeHow = id => BADGES.find(b => b.id === id)?.how || '';
+function wolfGear(p) {
+  const g = {};
+  for (const [slot, items] of Object.entries(WOLF_GEAR)) {
+    const it = items.find(i => i.id === p.wolf.gear[slot]);
+    if (it && itemUnlocked(p, it)) g[slot] = it.id;
+  }
+  return g;
+}
+function myWolf(p, mood = 'happy', { scene = true, cls = '' } = {}) {
+  const sc = WOLF_SCENES.find(s => s.id === p.wolf.scene);
+  return wolfSVG({ stage: wolfStage(p), mood, gear: wolfGear(p), scene: scene ? (sc && sceneUnlocked(p, sc) ? sc.id : 'den') : null, cls });
+}
+const daysAway = p => p.history.length ? Math.floor((Date.now() - Math.max(...p.history.map(h => h.t))) / 864e5) : 0;
+function wolfHomeMood(p) {
+  if (p.history.length && daysAway(p) >= 2) return 'sleepy';
+  return streakInfo(p).metToday ? 'excited' : 'happy';
+}
+function wolfLine(p) {
+  const n = p.wolf.name, st = streakInfo(p);
+  if (!p.history.length) return `Hi, I'm ${n}! I'm just a pup. Every time you practice, I grow a little.`;
+  if (daysAway(p) >= 2) return `${n} missed you! Even five minutes today would be great.`;
+  if (st.metToday) return st.streak > 1 ? `Goal done! That's ${st.streak} days in a row. Awoo!` : 'Goal done for today! Same time tomorrow?';
+  return pick([...TIPS, WOLF_STAGES[wolfStage(p)].say]);
+}
+// What the wolf says on a results screen. tone: great, good or tough.
+function wolfReact(p, tone) {
+  const n = p.wolf.name;
+  const lines = {
+    great: ['Awoo! That was a great run!', `${n} is doing a happy dance.`, 'Look at you go!', 'The whole pack is proud of you.'],
+    good: ['Nice and steady. That\'s how wolves hunt.', 'Good work. Keep those eyes on the screen.', 'Every run makes my paws a little stronger.', 'Solid! Ready for another?'],
+    tough: ['Tough one. Slow down a little and try again. I\'ll wait.', 'Even pack leaders miss sometimes. Breathe and go again.', 'Accuracy first. Speed comes later.', 'That\'s okay. Mistakes are how we learn the trail.'],
+  };
+  return `<div class="wolf-react">${myWolf(p, tone === 'great' ? 'excited' : 'happy', { scene: false })}<div class="bubble">${esc(pick(lines[tone]))}</div></div>`;
+}
+// Called from celebrations(): the wolf growing, and gear that new badges unlocked.
+function wolfNews(p, newBadgeIds) {
+  let html = '';
+  const stage = wolfStage(p);
+  if (stage > p.wolf.stageSeen) {
+    const scenes = WOLF_SCENES.filter(s => s.stage != null && s.stage > p.wolf.stageSeen && s.stage <= stage);
+    p.wolf.stageSeen = stage;
+    html += `<div class="evolve">${myWolf(p, 'howl', { scene: false })}<div><b>${esc(p.wolf.name)} grew into ${/^[AEIOU]/.test(WOLF_STAGES[stage].name) ? 'an' : 'a'} ${esc(WOLF_STAGES[stage].name)}!</b>
+      <p>${esc(WOLF_STAGES[stage].say)}${scenes.length ? ` New scene unlocked: ${scenes.map(s => esc(s.name)).join(', ')}.` : ''}</p></div></div>`;
+    setTimeout(() => Sound.pass(), 700);
+  }
+  const items = [...Object.values(WOLF_GEAR).flat(), ...WOLF_SCENES].filter(i => i.badge && newBadgeIds.includes(i.badge));
+  if (items.length) html += `<div class="verdict badge">🐺 New for ${esc(p.wolf.name)}: ${items.map(i => esc(i.name)).join(', ')}. Try ${items.length === 1 ? 'it' : 'them'} on in the den.</div>`;
+  if (html) save();
+  return html;
+}
+
+SCREENS.den = function () {
+  const p = me();
+  if (newBadges(p).length) save();
+  const stage = wolfStage(p), lv = levelInfo(p);
+  const next = WOLF_STAGES[stage + 1];
+  const toNext = next ? `${next.level - lv.n} level${next.level - lv.n === 1 ? '' : 's'} until ${next.name} (level ${next.level})` : 'Fully grown. A true legend.';
+  const pct = next ? Math.min(100, ((lv.n - WOLF_STAGES[stage].level) + lv.into / lv.need) / (next.level - WOLF_STAGES[stage].level) * 100) : 100;
+  const itemBtn = (kind, slot, it) => {
+    const open = kind === 'scene' ? sceneUnlocked(p, it) : itemUnlocked(p, it);
+    const on = kind === 'scene' ? p.wolf.scene === it.id : p.wolf.gear[slot] === it.id;
+    const how = it.badge ? badgeHow(it.badge) : it.stage != null ? `Grow ${p.wolf.name} into ${WOLF_STAGES[it.stage].name}` : '';
+    return `<button class="gear-btn ${on ? 'on' : ''} ${open ? '' : 'locked'}" data-kind="${kind}" data-slot="${slot}" data-id="${it.id}" ${open ? '' : 'disabled'} title="${esc(open ? it.name : `Locked: ${how}`)}">
+      <span>${esc(it.name)}</span><small>${open ? (on ? 'Wearing' : kind === 'scene' ? 'Visit' : 'Put on') : `🔒 ${esc(how)}`}</small></button>`;
+  };
+  const slotNames = { head: 'Head', eyes: 'Eyes', neck: 'Neck' };
+  $('#app').innerHTML = `
+    <div class="page-head"><div><h1>${esc(p.wolf.name)}'s den</h1>
+      <p class="muted" style="margin-top:6px">Your timberwolf grows as you level up, and badges unlock gear and places to visit.</p></div></div>
+    <div class="den">
+      <div class="card den-wolf">
+        ${myWolf(p, wolfHomeMood(p) === 'sleepy' ? 'sleepy' : 'happy')}
+        <div class="den-name"><input type="text" id="wolf-name" maxlength="20" value="${esc(p.wolf.name)}" aria-label="Your wolf's name" autocomplete="off"><span class="muted small">✎ rename</span></div>
+        <b>${esc(WOLF_STAGES[stage].name)}</b> <span class="muted small">· stage ${stage + 1} of ${WOLF_STAGES.length}</span>
+        <p class="muted small" style="margin-top:4px">${esc(WOLF_STAGES[stage].say)}</p>
+        <div class="bar xp" style="margin-top:10px"><div style="width:${pct}%"></div></div>
+        <p class="muted small">${esc(toNext)}</p>
+      </div>
+      <div class="den-closet">
+        ${Object.entries(WOLF_GEAR).map(([slot, items]) => `<div class="section-title" style="margin-top:0">${slotNames[slot]}</div>
+          <div class="gear-row"><button class="gear-btn ${p.wolf.gear[slot] ? '' : 'on'}" data-kind="gear" data-slot="${slot}" data-id=""><span>Nothing</span><small>${p.wolf.gear[slot] ? 'Take off' : 'Wearing'}</small></button>${items.map(it => itemBtn('gear', slot, it)).join('')}</div>`).join('')}
+        <div class="section-title">Scene</div>
+        <div class="gear-row">${WOLF_SCENES.map(sc => itemBtn('scene', '', sc)).join('')}</div>
+      </div>
+    </div>
+    <div class="section-title">Growing up · ${stage + 1} of ${WOLF_STAGES.length} stages</div>
+    <div class="stage-grid">${WOLF_STAGES.map((s, i) => `<div class="stage-tile ${i <= stage ? 'got' : ''} ${i === stage ? 'now' : ''}" title="${esc(s.say)}">
+      ${wolfSVG({ stage: i, silhouette: i > stage })}<b>${i <= stage ? esc(s.name) : '???'}</b><span class="muted small">Level ${s.level}</span></div>`).join('')}</div>`;
+  const name = $('#wolf-name');
+  const rename = () => { const v = name.value.trim().slice(0, 20); if (v && v !== p.wolf.name) { p.wolf.name = v; save(); go('den'); } };
+  name.addEventListener('change', rename);
+  name.addEventListener('keydown', e => { if (e.key === 'Enter') name.blur(); });
+  $$('.gear-btn:not([disabled])').forEach(b => b.onclick = () => {
+    if (b.dataset.kind === 'scene') p.wolf.scene = b.dataset.id;
+    else if (b.dataset.id) p.wolf.gear[b.dataset.slot] = b.dataset.id;
+    else delete p.wolf.gear[b.dataset.slot];
+    save(); Sound.click(); go('den');
+  });
 };
 
 // ── Weekly report card ─────────────────────────────────────────────────────
@@ -2214,6 +2367,8 @@ function openSettings() {
       <span><b>Fade the guide for keys I know</b><small>Once you rarely miss a key, it stops lighting up. Pause on it, or miss it, and the hint comes back.</small></span></label>
     <label class="check"><input type="checkbox" id="s-ghost" ${p.settings.ghost !== false ? 'checked' : ''}>
       <span><b>Race my best on passages 👻</b><small>When you retype a passage, a faint cursor shows where your best run was at that moment.</small></span></label>
+    <label class="check"><input type="checkbox" id="s-wolf" ${p.settings.wolfTyping !== false ? 'checked' : ''}>
+      <span><b>Show ${esc(p.wolf.name)} while I type 🐺</b><small>Your wolf sits in the corner and reacts as you type. Turn off if it's distracting.</small></span></label>
     <h3 style="margin:4px 0 4px">When I press the wrong key</h3>
     <div class="radio-group">
       ${radio('errorMode', 'stop', 'Stop until I fix it', 'You can\'t go on until you press the right key. Builds accuracy.')}
@@ -2240,6 +2395,7 @@ function openSettings() {
       p.settings.guide = $('input[name=guide]:checked', ov).value;
       p.settings.fade = $('#s-fade', ov).checked;
       p.settings.ghost = $('#s-ghost', ov).checked;
+      p.settings.wolfTyping = $('#s-wolf', ov).checked;
       p.settings.errorMode = $('input[name=errorMode]:checked', ov).value;
       save(); closeModal(); go('home');
     };
