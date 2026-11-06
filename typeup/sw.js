@@ -1,6 +1,6 @@
 // Network-first for the app itself (so updates show up right away when online),
 // falling back to the cached copy when offline.
-const CACHE = 'typeup-v3';
+const CACHE = 'typeup-v4';
 const ASSETS = [
   './',
   './index.html',

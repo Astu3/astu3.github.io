@@ -134,8 +134,10 @@ function newProfile(name, avatar) {
     ghostWins: 0,   // passages where you beat your own best run
     snaps: {},      // week start -> { k: key totals, x: mix-up totals } when that week began
     reportSeen: null, // the last weekly report opened, so Home stops announcing it
-    wolf: { name: 'Timber', gear: {}, scene: 'den', stageSeen: 0 },   // your timberwolf
+    wolf: { name: 'Timber', gear: {}, scene: 'den', stageSeen: 0, tricks: ['sit'], tricksDone: 0 },   // your timberwolf
     msBank: 0,      // practice time from old runs trimmed out of history
+    days: {},       // "YYYY-MM-DD" -> a small summary of that day, kept forever
+    recent: { keys: {}, pairs: {}, mix: {} },   // key numbers for how you type lately
   };
 }
 
@@ -152,6 +154,22 @@ function normalizeProfile(p) {
   if (!GOALS.includes(p.settings.goal)) p.settings.goal = 10;
   const num = v => Number.isFinite(v);
   p.history = p.history.filter(h => h && num(h.t) && num(h.wpm) && num(h.acc) && num(h.ms) && num(h.chars) && typeof h.kind === 'string');
+  // Daily summaries: built from history the first time, then kept as runs happen.
+  if (!p.days || typeof p.days !== 'object') { p.days = {}; p.history.forEach(h => addToDay(p, h)); }
+  for (const [k, d] of Object.entries(p.days)) {
+    if (!/^\d{4}-\d\d-\d\d$/.test(k) || !d || !num(d.ms) || !num(d.c)) { delete p.days[k]; continue; }
+    for (const f of ['tc', 'ws', 'as', 'n', 'tw', 'ta']) if (d[f] != null && !num(d[f])) delete d[f];
+    if (!(d.tc > 0 && num(d.ws) && num(d.as))) { delete d.tc; delete d.ws; delete d.as; delete d.n; }
+  }
+  // Recent key numbers start from the all-time ones, trimmed to the window.
+  const statsOk = o => o && typeof o === 'object' && Object.values(o).every(s => s && num(s.n) && num(s.m) && num(s.t) && num(s.tn));
+  if (!statsOk(p.keys)) p.keys = {};
+  if (!statsOk(p.pairs)) p.pairs = {};
+  const rc = p.recent;
+  if (!(rc && typeof rc === 'object' && statsOk(rc.keys) && statsOk(rc.pairs) && rc.mix && typeof rc.mix === 'object')) {
+    p.recent = { keys: capStats(p.keys, KEY_WINDOW), pairs: capStats(p.pairs, PAIR_WINDOW), mix: { ...(p.mixups && typeof p.mixups === 'object' ? p.mixups : {}) } };
+  }
+  for (const [k, v] of Object.entries(p.recent.mix)) if (!num(v)) delete p.recent.mix[k];
   for (const [id, g] of Object.entries(p.games)) if (!num(g?.best) || !num(g?.plays)) delete p.games[id];
   for (const [id, r] of Object.entries(p.passages)) {
     if (!r || typeof r !== 'object' || !num(r.bestWpm)) { delete p.passages[id]; continue; }
@@ -175,6 +193,8 @@ function normalizeProfile(p) {
     gear: Object.fromEntries(Object.entries(WOLF_GEAR).map(([slot, items]) => [slot, items.some(i => i.id === w.gear?.[slot]) ? w.gear[slot] : null]).filter(([, v]) => v)),
     scene: WOLF_SCENES.some(s => s.id === w.scene) ? w.scene : 'den',
     stageSeen: num(w.stageSeen) ? w.stageSeen : 0,
+    tricks: Array.isArray(w.tricks) ? w.tricks.filter(id => WOLF_TRICKS.some(t => t.id === id)) : null,
+    tricksDone: num(w.tricksDone) ? w.tricksDone : 0,
   };
   p.goalDays = Array.isArray(p.goalDays) ? p.goalDays.filter(d => typeof d === 'string')
     : [...dayTotals(p).entries()].filter(([, ms]) => ms >= goalMs(p)).map(([d]) => d);
@@ -185,6 +205,7 @@ function normalizeProfile(p) {
   if (!p.badges || typeof p.badges !== 'object') p.badges = {};
   for (const id of Object.keys(p.badges)) if (!num(p.badges[id])) delete p.badges[id];
   if (p.badgesV !== BADGES_VERSION) { newBadges(p); p.badgesV = BADGES_VERSION; }
+  if (!p.wolf.tricks) p.wolf.tricks = WOLF_TRICKS.filter(t => trickKnown(p, t)).map(t => t.id);
   if (!(p.plan && typeof p.plan.day === 'string' && Array.isArray(p.plan.steps) && p.plan.steps.every(s => s && PLAN_TYPES.includes(s.type)))) p.plan = null;
   return p;
 }
@@ -677,7 +698,7 @@ function startTyping(opts) {
 // Monday-to-Sunday weeks, for the weekly report.
 const weekStart = t => { const d = new Date(t); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); return d; };
 const weekKey = t => weekStart(t).toDateString();
-const compactKeys = p => Object.fromEntries(Object.entries(keyStats(p)).map(([k, s]) => [k, [s.n, s.m]]));
+const compactKeys = p => Object.fromEntries(Object.entries(keyStats(p, true)).map(([k, s]) => [k, [s.n, s.m]]));
 // Key and mix-up totals as they stood when each week began, so a week's own
 // numbers are the difference between two snapshots. Twelve weeks are kept.
 function snapWeek(p) {
@@ -689,31 +710,83 @@ function snapWeek(p) {
   keys.slice(0, -12).forEach(k => delete p.snaps[k]);
 }
 
+// Two sets of key numbers are kept. p.keys, p.pairs and p.mixups are
+// all-time totals (the weekly report compares them week to week). p.recent
+// holds the same numbers for how you type now: each key and letter pair keeps
+// only about its last few hundred presses, and mix-ups fade as you type more,
+// so a key you've fixed stops being called weak.
+const KEY_WINDOW = 300, PAIR_WINDOW = 120, MIX_HALF_LIFE = 20000;
+const r1 = v => Math.round(v * 10) / 10;
+function bumpStat(store, id, n, m, t, tn, cap) {
+  const s = store[id] || (store[id] = { n: 0, m: 0, t: 0, tn: 0 });
+  s.n += n; s.m += m; s.t += t; s.tn += tn;
+  if (!cap) return;
+  const tot = s.n + s.m;
+  if (tot > cap) { s.n *= cap / tot; s.m *= cap / tot; }
+  if (s.tn > cap) { s.t *= cap / s.tn; s.tn = cap; }
+  for (const k of ['n', 'm', 't', 'tn']) s[k] = r1(s[k]);
+}
+const capStats = (src, cap) => Object.fromEntries(Object.entries(src || {}).map(([id, s]) => {
+  const c = { n: 0, m: 0, t: 0, tn: 0 };
+  bumpStat({ x: c }, 'x', s.n, s.m, s.t, s.tn, cap);
+  return [id, c];
+}));
+
 function recordKeys(p, session) {
   snapWeek(p);
-  const touch = ch => p.keys[ch] || (p.keys[ch] = { n: 0, m: 0, t: 0, tn: 0 });
-  for (const [ch, n] of Object.entries(session.misses)) touch(ch).m += n;
-  for (const [ch, [t, n]] of Object.entries(session.lat)) { const k = touch(ch); k.t += t; k.tn += n; }
+  const run = {};   // char -> [hits, misses, ms, timed] for this run
+  const a = ch => run[ch] || (run[ch] = [0, 0, 0, 0]);
+  for (const [ch, n] of Object.entries(session.misses)) a(ch)[1] += n;
+  for (const [ch, [t, n]] of Object.entries(session.lat)) { a(ch)[2] += t; a(ch)[3] += n; }
   // Count hits from what was typed correctly
-  [...session.text].forEach((ch, i) => { if (session.marks[i] === 1 || session.marks[i] === 3) touch(ch).n++; });
+  [...session.text].forEach((ch, i) => { if (session.marks[i] === 1 || session.marks[i] === 3) a(ch)[0]++; });
+  p.pairs ||= {};
+  p.recent ||= { keys: {}, pairs: {}, mix: {} };
+  for (const [ch, [n, m, t, tn]] of Object.entries(run)) {
+    bumpStat(p.keys, ch, n, m, t, tn);
+    bumpStat(p.recent.keys, ch, n, m, t, tn, KEY_WINDOW);
+  }
+  for (const [pr, [n, m, t, tn]] of Object.entries(session.pairs)) {
+    bumpStat(p.pairs, pr, n, m, t, tn);
+    bumpStat(p.recent.pairs, pr, n, m, t, tn, PAIR_WINDOW);
+  }
+  // Recent mix-ups halve with every 20,000 characters typed.
+  const fade = 0.5 ** (session.text.length / MIX_HALF_LIFE);
+  for (const [id, v] of Object.entries(p.recent.mix)) {
+    if (v * fade < 0.5) delete p.recent.mix[id]; else p.recent.mix[id] = r1(v * fade);
+  }
   for (const [pair, n] of Object.entries(session.wrongs)) {
     const id = mixupId(...pair);
-    if (id) p.mixups[id] = (p.mixups[id] || 0) + n;
-  }
-  p.pairs ||= {};
-  for (const [pr, [n, m, t, tn]] of Object.entries(session.pairs)) {
-    const r = p.pairs[pr] || (p.pairs[pr] = { n: 0, m: 0, t: 0, tn: 0 });
-    r.n += n; r.m += m; r.t += t; r.tn += tn;
+    if (!id) continue;
+    p.mixups[id] = (p.mixups[id] || 0) + n;
+    p.recent.mix[id] = r1((p.recent.mix[id] || 0) + n);
   }
 }
 
 // ── Daily goal, streak and levels ──────────────────────────────────────────
 const GOALS = [5, 10, 15, 20, 30];
 const goalMs = p => (p.settings.goal || 10) * 60000;
+// One small summary per day, kept forever (history itself keeps the last
+// 3,000 runs), so trends can reach back to your very first day.
+//   ms, c: practice time and characters, all kinds of practice
+//   tc, ws, as, n: characters, wpm·chars and acc·chars over runs that count
+//                  toward the trend, and how many of them
+//   tw, ta: the day's best 1-minute test and its accuracy
+const DAY_MS = 864e5;
+const pad2 = n => String(n).padStart(2, '0');
+const dayKey = t => { const d = new Date(t); return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`; };
+const dayDate = k => { const [y, m, d] = k.split('-').map(Number); return new Date(y, m - 1, d); };
+function addToDay(p, h) {
+  const d = p.days[dayKey(h.t)] ||= { ms: 0, c: 0 };
+  d.ms += h.ms; d.c += h.chars;
+  if (countsForTrend(h) && h.chars > 0) {
+    d.tc = (d.tc || 0) + h.chars; d.n = (d.n || 0) + 1;
+    d.ws = r1((d.ws || 0) + h.wpm * h.chars); d.as = r1((d.as || 0) + h.acc * h.chars);
+  }
+  if (h.kind === 'test' && h.wpm >= (d.tw || 0)) { d.tw = h.wpm; d.ta = h.acc; }
+}
 function dayTotals(p) {
-  const m = new Map();
-  p.history.forEach(h => { const d = new Date(h.t).toDateString(); m.set(d, (m.get(d) || 0) + h.ms); });
-  return m;
+  return new Map(Object.entries(p.days || {}).map(([k, d]) => [dayDate(k).toDateString(), d.ms]));
 }
 // Days count once their goal is met, and stay counted: changing the goal later
 // doesn't rewrite the past. Today doesn't break the streak until it's over.
@@ -783,9 +856,10 @@ function celebrations(p) {
 
 // ── Weak spots ─────────────────────────────────────────────────────────────
 // Stats per physical key: capital F and f both count toward the F key.
-function keyStats(p) {
+// Recent numbers by default; all-time totals for week-to-week comparisons.
+function keyStats(p, allTime = false) {
   const out = {};
-  for (const [ch, k] of Object.entries(p.keys)) {
+  for (const [ch, k] of Object.entries(allTime ? p.keys : p.recent?.keys || p.keys)) {
     const key = keyFor(ch).key;
     const o = out[key] || (out[key] = { n: 0, m: 0, t: 0, tn: 0 });
     o.n += k.n; o.m += k.m; o.t += k.t; o.tn += k.tn;
@@ -820,7 +894,7 @@ function rankWeak(entries, minSamples, limit) {
 function weakSpots(p) {
   const learned = new Set([...learnedSet(p)].map(c => keyFor(c).key));
   const keys = rankWeak(Object.entries(keyStats(p)).filter(([k]) => k !== ' ' && learned.has(k)), 12, 4);
-  const pairs = rankWeak(Object.entries(p.pairs || {}), 6, 3).filter(pr => !keys.includes(pr[0]) || !keys.includes(pr[1]));
+  const pairs = rankWeak(Object.entries(p.recent?.pairs || p.pairs || {}), 6, 3).filter(pr => !keys.includes(pr[0]) || !keys.includes(pr[1]));
   return { keys, pairs };
 }
 
@@ -965,9 +1039,10 @@ function mixupInfo(id) {
   else tip = `${A} is your ${fname(fa)}'s key; ${B} is your ${fname(fb)}'s. Slow down on ${A} until the reach feels automatic.`;
   return { id, keys: [a, b], title: `${B} instead of ${A}`, tip };
 }
-// The mix-ups worth coaching: they keep happening, not a one-off slip.
-const topMixups = (p, limit = 3) => Object.entries(p.mixups || {})
-  .filter(([, n]) => n >= 3).sort((a, b) => b[1] - a[1]).slice(0, limit).map(([id, n]) => ({ ...mixupInfo(id), n }));
+// The mix-ups worth coaching: they keep happening lately, not a one-off slip
+// or an old habit you've already fixed.
+const topMixups = (p, limit = 3) => Object.entries(p.recent?.mix || p.mixups || {})
+  .filter(([, n]) => n >= 3).sort((a, b) => b[1] - a[1]).slice(0, limit).map(([id, n]) => ({ ...mixupInfo(id), n: Math.round(n) }));
 
 function mixupDrillText(p, id) {
   const learned = learnedSet(p);
@@ -1012,6 +1087,7 @@ function runMixupDrill(id, back = 'progress') {
 function recordRun(p, entry) {
   celebrateFrom = { level: levelInfo(p).n, met: streakInfo(p).metToday };
   p.history.push({ t: Date.now(), ...entry, wpm: +entry.wpm.toFixed(1), acc: +entry.acc.toFixed(1), ms: Math.round(entry.ms) });
+  addToDay(p, p.history.at(-1));
   const today = new Date().toDateString();
   if (!p.goalDays.includes(today) && (dayTotals(p).get(today) || 0) >= goalMs(p)) p.goalDays.push(today);
   planAdvance(p, p.history.at(-1));
@@ -1253,6 +1329,7 @@ const SCREENS = {
     $('#go-next').onclick = next.go;
     $('#go-plan').onclick = startPlan;
     $('#go-den').onclick = () => go('den');
+    if (p.wolf.tricks.includes('wag')) setTimeout(() => playTrick($('.wolf-card .wolf-pic'), p, 'wag', { count: false, sound: false }), 700);
     $('#go-den').onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go('den'); } };
     $('#go-report') && ($('#go-report').onclick = () => go('report'));
     $('#go-drill') && ($('#go-drill').onclick = () => runDrill('home'));
@@ -1426,20 +1503,91 @@ function runTitle(h) {
 }
 
 // ── Progress ───────────────────────────────────────────────────────────────
-// Trends use passages, lesson checks and drills. The warm-up steps repeat
-// letters ("fff jjj"), which would make speed look better than it is.
-const countsForTrend = h => h.kind === 'passage' || h.kind === 'drill' || h.kind === 'test' || h.step === 'check';
+// Trends use passages, lesson checks and speed tests: real typing at an honest
+// pace. Warm-ups repeat letters ("fff jjj") and look faster than you are;
+// drills aim at your weakest keys on purpose and look slower. Games have
+// their own rules. None of those would show how your typing is really going.
+const countsForTrend = h => h.kind === 'passage' || h.kind === 'test' || h.step === 'check';
 
-function trendSeries(p) {
-  const runs = p.history.filter(countsForTrend).sort((a, b) => a.t - b.t);
-  const byDay = new Map();
-  runs.forEach(h => { const d = new Date(h.t).toDateString(); if (!byDay.has(d)) byDay.set(d, []); byDay.get(d).push(h); });
-  if (byDay.size >= 3) {
-    return { by: 'day', points: [...byDay.entries()].slice(-60).map(([d, hs]) => ({
-      label: new Date(d).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }),
-      wpm: mean(hs.map(h => h.wpm)), acc: mean(hs.map(h => h.acc)), n: hs.length })) };
+// Averages weighted by characters typed, so a long passage counts for more
+// than a short lesson check.
+function wavg(runs, key) {
+  if (!runs.length) return null;
+  const w = runs.reduce((a, h) => a + h.chars, 0);
+  return w ? runs.reduce((a, h) => a + h[key] * h.chars, 0) / w : mean(runs.map(h => h[key]));
+}
+
+const shortDate = (t, withYear) => new Date(t).toLocaleDateString(undefined, { month: 'short', day: 'numeric', ...(withYear ? { year: 'numeric' } : {}) });
+function dailyPoints(p) {
+  return Object.entries(p.days || {}).filter(([, d]) => d.tc > 0)
+    .map(([k, d]) => ({ t: +dayDate(k), wpm: d.ws / d.tc, acc: d.as / d.tc, w: d.tc, n: d.n || 1 }))
+    .sort((a, b) => a.t - b.t);
+}
+// Each point also gets the weighted average of the `span` days up to it: the
+// bold trendline.
+function withRolling(pts, span) {
+  return pts.map(d => {
+    const win = pts.filter(x => x.t <= d.t && x.t > d.t - span * DAY_MS);
+    const w = win.reduce((a, x) => a + x.w, 0);
+    return { ...d, wpmT: win.reduce((a, x) => a + x.wpm * x.w, 0) / w, accT: win.reduce((a, x) => a + x.acc * x.w, 0) / w };
+  });
+}
+// Practice days grouped into Monday-to-Sunday weeks.
+function weeklyPoints(daily) {
+  const m = new Map();
+  daily.forEach(d => {
+    const t = +weekStart(d.t), o = m.get(t) || { t, w: 0, ws: 0, as: 0, n: 0 };
+    o.w += d.w; o.ws += d.wpm * d.w; o.as += d.acc * d.w; o.n += d.n;
+    m.set(t, o);
+  });
+  return [...m.values()].sort((a, b) => a.t - b.t).map(o => ({ t: o.t, wpm: o.ws / o.w, acc: o.as / o.w, w: o.w, n: o.n }));
+}
+// How fast something is changing: a weighted straight-line fit through the
+// last four weeks of practice days, given per week. Needs at least four days
+// spread over a week or more, or it's just noise.
+function weeklyRate(daily, key, days = 28) {
+  const from = Date.now() - days * DAY_MS;
+  const r = daily.filter(d => d.t > from);
+  if (r.length < 4 || r.at(-1).t - r[0].t < 7 * DAY_MS) return null;
+  const W = r.reduce((a, d) => a + d.w, 0);
+  const mx = r.reduce((a, d) => a + d.w * d.t, 0) / W, my = r.reduce((a, d) => a + d.w * d[key], 0) / W;
+  const sxx = r.reduce((a, d) => a + d.w * (d.t - mx) ** 2, 0);
+  return sxx ? r.reduce((a, d) => a + d.w * (d.t - mx) * (d[key] - my), 0) / sxx * 7 * DAY_MS : null;
+}
+
+// Up to 3 months: one point per practice day with a 7-day average. Beyond
+// that, "All time" shows one point per week with a 3-week average. With
+// fewer than 3 practice days, the last runs are shown one by one.
+function trendSeries(p, range = 'recent') {
+  const daily = dailyPoints(p);
+  const rates = { wpm: weeklyRate(daily, 'wpm'), acc: weeklyRate(daily, 'acc') };
+  if (daily.length < 3) {
+    const runs = p.history.filter(countsForTrend).sort((a, b) => a.t - b.t).slice(-40);
+    return { by: 'run', long: false, rates, points: runs.map(h => ({ label: `${runTitle(h)} · ${fmtDay(h.t)}`, wpm: h.wpm, acc: h.acc, n: 1 })) };
   }
-  return { by: 'run', points: runs.slice(-40).map(h => ({ label: `${runTitle(h)} · ${fmtDay(h.t)}`, wpm: h.wpm, acc: h.acc, n: 1 })) };
+  const long = daily.at(-1).t - daily[0].t > 90 * DAY_MS;
+  const multiYear = new Date(daily[0].t).getFullYear() !== new Date().getFullYear();
+  if (range === 'all' && long) {
+    return { by: 'week', long, rates, avgLabel: '3-week average',
+      points: withRolling(weeklyPoints(daily), 21).map(d => ({ ...d, label: `Week of ${shortDate(d.t, multiYear)}` })) };
+  }
+  const from = daily.at(-1).t - 90 * DAY_MS;
+  return { by: 'day', long, rates, avgLabel: '7-day average',
+    points: withRolling(daily, 7).filter(d => d.t > from).map(d => ({ ...d, label: shortDate(d.t, multiYear) })) };
+}
+// The 1-minute test is the cleanest number there is: same length, common
+// words, every time. One point per day you took it (your best that day).
+const testPoints = p => Object.entries(p.days || {}).filter(([, d]) => d.tw > 0)
+  .map(([k, d]) => ({ t: +dayDate(k), wpm: d.tw, acc: d.ta, n: 1, label: shortDate(+dayDate(k), dayDate(k).getFullYear() !== new Date().getFullYear()) }))
+  .sort((a, b) => a.t - b.t);
+
+// "Up 1.2 WPM a week over the last 4 weeks"
+function rateLine(rate, unit, still) {
+  if (rate == null) return `<p class="rate muted small">${esc(still)}</p>`;
+  const small = unit === 'WPM' ? 0.2 : 0.1;
+  if (Math.abs(rate) < small) return '<p class="rate small">● Holding steady over the last 4 weeks</p>';
+  const up = rate > 0;
+  return `<p class="rate small ${up ? 'up' : 'down'}">${up ? '▲ Up' : '▼ Down'} ${Math.abs(rate).toFixed(1)} ${unit} a week over the last 4 weeks</p>`;
 }
 
 function niceStep(span, count) {
@@ -1449,20 +1597,26 @@ function niceStep(span, count) {
 
 // One series per chart (speed and accuracy have different scales, so they
 // never share an axis). Hover or arrow keys move a crosshair with a readout.
+// Points with a time `t` sit on a real calendar, so a week off looks like a
+// week. When points carry a trend value (o.key + 'T'), each day is a faint
+// dot and the trend is the bold line.
 function lineChart(box, pts, o) {
   box.innerHTML = '';
   const W = Math.max(260, box.clientWidth), H = 210, m = { l: 40, r: 58, t: 14, b: 28 };
   const iw = W - m.l - m.r, ih = H - m.t - m.b;
   const vals = pts.map(d => d[o.key]);
+  const tKey = o.key + 'T', hasTrend = pts.length > 1 && pts.every(d => d[tKey] != null);
+  const tv = hasTrend ? pts.map(d => d[tKey]) : vals;   // the line you read
   let lo = o.min(vals), hi = o.max(vals);
   const step = niceStep(hi - lo || 1, 4);
   lo = Math.floor(lo / step) * step; hi = Math.ceil(hi / step) * step;
   if (hi === lo) hi = lo + step;
-  const x = i => m.l + (pts.length === 1 ? iw / 2 : i * iw / (pts.length - 1));
+  const timed = pts.length > 1 && pts.every(d => d.t != null) && pts.at(-1).t > pts[0].t;
+  const x = i => m.l + (pts.length === 1 ? iw / 2 : timed ? (pts[i].t - pts[0].t) / (pts.at(-1).t - pts[0].t) * iw : i * iw / (pts.length - 1));
   const y = v => m.t + ih - (v - lo) / (hi - lo) * ih;
 
   const svg = svgEl('svg', { viewBox: `0 0 ${W} ${H}`, width: W, height: H, class: 'chart', tabindex: 0, role: 'img',
-    'aria-label': `${o.title}: latest ${o.fmt(vals.at(-1))}, ${pts.length} ${o.unit}. Use the arrow keys to read each point.` });
+    'aria-label': `${o.title}: latest ${hasTrend ? `${o.avgLabel || 'average'} ` : ''}${o.fmt(tv.at(-1))}, ${pts.length} ${o.unit}. Use the arrow keys to read each point.` });
   for (let v = lo; v <= hi + 1e-9; v += step) {
     svg.append(svgEl('line', { x1: m.l, x2: m.l + iw, y1: y(v), y2: y(v), class: 'grid' }));
     const t = svgEl('text', { x: m.l - 8, y: y(v) + 4, class: 'tick', 'text-anchor': 'end' }); t.textContent = o.tick(v); svg.append(t);
@@ -1471,17 +1625,29 @@ function lineChart(box, pts, o) {
     svg.append(svgEl('line', { x1: m.l, x2: m.l + iw, y1: y(o.ref), y2: y(o.ref), class: 'ref' }));
     const t = svgEl('text', { x: m.l + 4, y: y(o.ref) - 6, class: 'tick' }); t.textContent = o.refLabel; svg.append(t);
   }
-  const xl = pts.length > 4 ? [0, Math.floor((pts.length - 1) / 2), pts.length - 1] : pts.map((_, i) => i);
-  if (o.unit === 'days') xl.forEach(i => {
-    const t = svgEl('text', { x: x(i), y: H - 8, class: 'tick', 'text-anchor': i === 0 && pts.length > 1 ? 'start' : i === pts.length - 1 && pts.length > 1 ? 'end' : 'middle' });
-    t.textContent = pts[i].label; svg.append(t);
-  });
-  else { const t = svgEl('text', { x: m.l, y: H - 8, class: 'tick' }); t.textContent = `Last ${pts.length} runs, oldest to newest`; svg.append(t); }
-
-  svg.append(svgEl('path', { d: pts.map((d, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(d[o.key]).toFixed(1)}`).join(''), class: 'line', style: `stroke:${o.color}` }));
+  // Dates along the bottom: the ends, plus the point nearest the middle
+  // when it has room.
   const last = pts.length - 1;
-  svg.append(svgEl('circle', { cx: x(last), cy: y(vals[last]), r: 4, class: 'dot', style: `fill:${o.color}` }));
-  const lbl = svgEl('text', { x: x(last) + 10, y: y(vals[last]) + 4, class: 'direct' }); lbl.textContent = o.fmt(vals[last]); svg.append(lbl);
+  if (timed || o.unit === 'days') {
+    let xl = pts.length > 4 ? [0, last] : pts.map((_, i) => i);
+    if (pts.length > 4) {
+      const mid = pts.reduce((b, _, i) => Math.abs(x(i) - (m.l + iw / 2)) < Math.abs(x(b) - (m.l + iw / 2)) ? i : b, 0);
+      if (x(mid) - x(0) > 70 && x(last) - x(mid) > 70) xl = [0, mid, last];
+    }
+    xl.forEach(i => {
+      const t = svgEl('text', { x: x(i), y: H - 8, class: 'tick', 'text-anchor': i === 0 && pts.length > 1 ? 'start' : i === last && pts.length > 1 ? 'end' : 'middle' });
+      t.textContent = pts[i].label.replace(/^Week of /, ''); svg.append(t);
+    });
+  } else { const t = svgEl('text', { x: m.l, y: H - 8, class: 'tick' }); t.textContent = `Last ${pts.length} runs, oldest to newest`; svg.append(t); }
+
+  const path = arr => arr.map((v, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join('');
+  if (hasTrend) {
+    svg.append(svgEl('path', { d: path(vals), class: 'line faint', style: `stroke:${o.color}` }));
+    if (pts.length <= 120) pts.forEach((d, i) => svg.append(svgEl('circle', { cx: x(i), cy: y(vals[i]), r: 2.5, class: 'pt', style: `fill:${o.color}` })));
+    svg.append(svgEl('path', { d: path(tv), class: 'line trend', style: `stroke:${o.color}` }));
+  } else svg.append(svgEl('path', { d: path(vals), class: 'line', style: `stroke:${o.color}` }));
+  svg.append(svgEl('circle', { cx: x(last), cy: y(tv[last]), r: 4, class: 'dot', style: `fill:${o.color}` }));
+  const lbl = svgEl('text', { x: x(last) + 10, y: y(tv[last]) + 4, class: 'direct' }); lbl.textContent = o.fmt(tv[last]); svg.append(lbl);
 
   // Hover layer
   const hair = svgEl('line', { y1: m.t, y2: m.t + ih, class: 'hair', visibility: 'hidden' });
@@ -1499,6 +1665,7 @@ function lineChart(box, pts, o) {
     const strong = document.createElement('b'); strong.textContent = o.fmt(vals[i]);
     const sub = document.createElement('span'); sub.textContent = pts[i].label + (pts[i].n > 1 ? ` · ${pts[i].n} runs` : '');
     tip.append(strong, sub);
+    if (hasTrend) { const avg = document.createElement('span'); avg.textContent = `${o.avgLabel || 'Average'}: ${o.fmt(tv[i])}`; tip.append(avg); }
     tip.hidden = false;
     const left = x(i) / W * box.clientWidth;
     tip.style.left = Math.min(Math.max(left, 70), box.clientWidth - 70) + 'px';
@@ -1509,7 +1676,7 @@ function lineChart(box, pts, o) {
   hit.addEventListener('pointermove', e => {
     const r = svg.getBoundingClientRect();
     const px = (e.clientX - r.left) / r.width * W;
-    show(pts.length === 1 ? 0 : Math.round((px - m.l) / (iw / (pts.length - 1))));
+    show(pts.reduce((b, _, i) => Math.abs(x(i) - px) < Math.abs(x(b) - px) ? i : b, 0));
   });
   hit.addEventListener('pointerleave', hide);
   svg.addEventListener('focus', () => show(last));
@@ -1550,8 +1717,8 @@ function heatmap(box, p, mode) {
       el.classList.add('heat'); el.style.setProperty('--heat', H.color); el.style.setProperty('--h', HEAT_MIX[bin]);
       if (bin >= 3) el.classList.add('hot');
       line = mode === 'mistakes'
-        ? `${(missRate(k) * 100).toFixed(1)}% missed · ${k.m} of ${k.n + k.m}`
-        : `${(avgMs(k) / 1000).toFixed(2)}s per press · ${k.tn} timed`;
+        ? `${(missRate(k) * 100).toFixed(1)}% missed in your last ${Math.round(k.n + k.m)} presses`
+        : `${(avgMs(k) / 1000).toFixed(2)}s per press, last ${Math.round(k.tn)} timed`;
     } else { el.classList.add('nodata'); line = 'Not enough typing yet'; }
     el.tabIndex = 0;
     el.setAttribute('aria-label', `${name}: ${line}`);
@@ -1574,16 +1741,17 @@ function weakChips(spots) {
     ...spots.pairs.map(pr => `<span class="keycap pair">${esc(pr)}</span>`)].join('');
 }
 
+let trendRange = 'recent';   // 'recent' (3 months, daily) or 'all' (weekly)
 SCREENS.progress = function (heatMode = 'mistakes') {
   const p = me();
-  const trend = trendSeries(p);
+  let trend = trendSeries(p, trendRange);
   const recent = p.history.filter(countsForTrend).slice(-10);
-  const days = new Set(p.history.map(h => new Date(h.t).toDateString())).size;
-  const totalMs = p.history.reduce((a, h) => a + h.ms, 0);
+  const days = Object.keys(p.days || {}).length;
+  const totalMs = (p.msBank || 0) + p.history.reduce((a, h) => a + h.ms, 0);
   const spots = weakSpots(p);
   const passagesDone = Object.keys(p.passages).length;
-  const unit = trend.by === 'day' ? 'days' : 'runs';
   const tests = testRuns(p);
+  const testPts = testPoints(p);
   const mixups = topMixups(p);
   if (newBadges(p).length) save();   // anything earned outside a results screen
   const earned = BADGES.filter(b => p.badges[b.id]).sort((a, b) => p.badges[b.id] - p.badges[a.id]);
@@ -1591,31 +1759,33 @@ SCREENS.progress = function (heatMode = 'mistakes') {
 
   $('#app').innerHTML = `
     <div class="page-head"><div><h1>Progress</h1>
-      <p class="muted" style="margin-top:6px">Speed and accuracy from passages, lesson checks, drills and speed tests.</p></div>
+      <p class="muted" style="margin-top:6px">Speed and accuracy from passages, lesson checks and speed tests. Drills and games are left out: they're made harder or easier on purpose.</p></div>
       <button class="btn ghost" id="go-report">📊 Weekly report card</button></div>
     <div class="stats four" style="margin-top:18px">
-      <div class="stat"><div class="v">${recent.length ? Math.round(mean(recent.map(h => h.wpm))) : '–'}<small> WPM</small></div><div class="k">Typing speed, last 10 runs</div></div>
-      <div class="stat"><div class="v">${recent.length ? fmtAcc(mean(recent.map(h => h.acc))) : '–'}</div><div class="k">Accuracy, last 10 runs</div></div>
+      <div class="stat"><div class="v">${recent.length ? Math.round(wavg(recent, 'wpm')) : '–'}<small> WPM</small></div><div class="k">Typing speed, last 10 runs</div></div>
+      <div class="stat"><div class="v">${recent.length ? fmtAcc(wavg(recent, 'acc')) : '–'}</div><div class="k">Accuracy, last 10 runs</div></div>
       <div class="stat"><div class="v">${Math.round(totalMs / 60000)}<small> min</small></div><div class="k">Practice on ${days} day${days === 1 ? '' : 's'}</div></div>
       <div class="stat"><div class="v">${passagesDone}<small> / ${PASSAGES.length}</small></div><div class="k">Passages typed</div></div>
     </div>
     ${trend.points.length >= 2 ? `
+      ${trend.long ? `<div class="chips trend-range">${[['recent', 'Last 3 months'], ['all', 'All time']].map(([k, l]) => `<button class="chip ${k === trendRange ? 'on' : ''}" data-range="${k}">${l}</button>`).join('')}</div>` : ''}
       <div class="charts">
-        <div class="card"><h3>Speed</h3><p class="muted small">Words per minute${trend.by === 'day' ? ', daily average' : ''}</p><div class="chart-box" id="c-wpm"></div></div>
-        <div class="card"><h3>Accuracy</h3><p class="muted small">Percent of keys right the first time${trend.by === 'day' ? ', daily average' : ''}</p><div class="chart-box" id="c-acc"></div></div>
+        <div class="card"><h3>Speed</h3><p class="muted small" data-sub="Words per minute"></p>${rateLine(trend.rates.wpm, 'WPM', 'Your weekly trend shows up after a week or two of practice.')}<div class="chart-box" id="c-wpm"></div></div>
+        <div class="card"><h3>Accuracy</h3><p class="muted small" data-sub="Percent of keys right the first time"></p>${rateLine(trend.rates.acc, 'points', 'Your weekly trend shows up after a week or two of practice.')}<div class="chart-box" id="c-acc"></div></div>
       </div>
-      <details class="table-view"><summary>Show as a table</summary>
-        <table><thead><tr><th>${trend.by === 'day' ? 'Day' : 'Run'}</th><th>WPM</th><th>Accuracy</th>${trend.by === 'day' ? '<th>Runs</th>' : ''}</tr></thead>
-        <tbody>${trend.points.slice().reverse().map(d => `<tr><td>${esc(d.label)}</td><td>${d.wpm.toFixed(1)}</td><td>${fmtAcc(d.acc)}</td>${trend.by === 'day' ? `<td>${d.n}</td>` : ''}</tr>`).join('')}</tbody></table>
-      </details>`
+      <details class="table-view"><summary>Show as a table</summary><div id="trend-table"></div></details>`
     : `<div class="card empty" style="margin-top:16px"><b>Your charts show up here.</b><p class="muted">Pass a lesson check or type a passage or two, and you'll see your speed and accuracy over time.</p></div>`}
 
     <div class="section-title">Speed test</div>
-    <div class="card weak-card">
-      <div><p>${tests.length
-        ? `Best <b>${Math.round(Math.max(...tests.map(h => h.wpm)))} WPM</b> · last <b>${Math.round(tests.at(-1).wpm)} WPM</b> at ${fmtAcc(tests.at(-1).acc)} (${esc(fmtDay(tests.at(-1).t).toLowerCase())}) · ${tests.length} test${tests.length === 1 ? '' : 's'} taken`
-        : 'A 1-minute test gives you one number to track. Take it now for a starting point, then again every week or so.'}</p></div>
-      <button class="btn" id="speed-test">⏱ Take the 1-minute test</button>
+    <div class="card">
+      <div class="weak-card" style="padding:0">
+        <div><p>${tests.length
+          ? `Best <b>${Math.round(Math.max(...tests.map(h => h.wpm)))} WPM</b> · last <b>${Math.round(tests.at(-1).wpm)} WPM</b> at ${fmtAcc(tests.at(-1).acc)} (${esc(fmtDay(tests.at(-1).t).toLowerCase())}) · ${tests.length} test${tests.length === 1 ? '' : 's'} taken`
+          : 'A 1-minute test gives you one number to track. Take it now for a starting point, then again every week or so.'}</p>
+          ${testPts.length >= 2 ? (() => { const d = testPts.at(-1).wpm - testPts[0].wpm; return `<p class="rate small ${d >= 0.5 ? 'up' : d <= -0.5 ? 'down' : ''}">${d >= 0.5 ? `▲ Up ${d.toFixed(1)} WPM` : d <= -0.5 ? `▼ Down ${(-d).toFixed(1)} WPM` : '● About the same'} since your first test (${esc(testPts[0].label)})</p>`; })() : ''}</div>
+        <button class="btn" id="speed-test">⏱ Take the 1-minute test</button>
+      </div>
+      ${testPts.length >= 2 ? '<div class="chart-box" id="c-test" style="margin-top:12px"></div>' : ''}
     </div>
 
     <div class="section-title">Your keyboard</div>
@@ -1657,13 +1827,27 @@ SCREENS.progress = function (heatMode = 'mistakes') {
     </div>`;
 
   const draw = () => {
-    if (trend.points.length < 2) return;
-    lineChart($('#c-wpm'), trend.points, { key: 'wpm', title: 'Speed', unit, color: 'var(--accent)',
+    if (testPts.length >= 2) lineChart($('#c-test'), testPts, { key: 'wpm', title: '1-minute test', unit: 'tests', color: 'var(--warm)',
       min: () => 0, max: v => Math.max(10, ...v) * 1.1, fmt: v => `${Math.round(v)} WPM`, tick: v => String(Math.round(v)) });
-    lineChart($('#c-acc'), trend.points, { key: 'acc', title: 'Accuracy', unit, color: 'var(--good)',
+    if (trend.points.length < 2) return;
+    const unit = { day: 'days', week: 'weeks', run: 'runs' }[trend.by];
+    const sub = { day: ', each practice day, with a bold 7-day average', week: ', each week, with a bold 3-week average', run: ', one dot per run' }[trend.by];
+    $$('[data-sub]').forEach(el => { el.textContent = el.dataset.sub + sub; });
+    lineChart($('#c-wpm'), trend.points, { key: 'wpm', title: 'Speed', unit, avgLabel: trend.avgLabel, color: 'var(--accent)',
+      min: () => 0, max: v => Math.max(10, ...v) * 1.1, fmt: v => `${Math.round(v)} WPM`, tick: v => String(Math.round(v)) });
+    lineChart($('#c-acc'), trend.points, { key: 'acc', title: 'Accuracy', unit, avgLabel: trend.avgLabel, color: 'var(--good)',
       min: v => Math.min(90, ...v), max: () => 100, fmt: fmtAcc, tick: v => v + '%', ref: PASS_ACC, refLabel: `Lesson pass line ${PASS_ACC}%` });
+    const avg = trend.by !== 'run';
+    $('#trend-table').innerHTML = `<table><thead><tr><th>${{ day: 'Day', week: 'Week', run: 'Run' }[trend.by]}</th><th>WPM</th><th>Accuracy</th>${avg ? `<th>${esc(trend.avgLabel)}</th><th>Runs</th>` : ''}</tr></thead>
+      <tbody>${trend.points.slice().reverse().map(d => `<tr><td>${esc(d.label)}</td><td>${d.wpm.toFixed(1)}</td><td>${fmtAcc(d.acc)}</td>${avg ? `<td>${d.wpmT.toFixed(1)} WPM · ${fmtAcc(d.accT)}</td><td>${d.n}</td>` : ''}</tr>`).join('')}</tbody></table>`;
   };
   draw();
+  $$('[data-range]').forEach(b => b.onclick = () => {
+    trendRange = b.dataset.range;
+    $$('[data-range]').forEach(x => x.classList.toggle('on', x === b));
+    trend = trendSeries(p, trendRange);
+    draw();
+  });
   heatmap($('#heat'), p, heatMode);
   $$('[data-heat]').forEach(b => b.onclick = () => {
     $$('[data-heat]').forEach(x => x.classList.toggle('on', x === b));
@@ -1721,11 +1905,50 @@ function wolfReact(p, tone) {
     good: ['Nice and steady. That\'s how wolves hunt.', 'Good work. Keep those eyes on the screen.', 'Every run makes my paws a little stronger.', 'Solid! Ready for another?'],
     tough: ['Tough one. Slow down a little and try again. I\'ll wait.', 'Even pack leaders miss sometimes. Breathe and go again.', 'Accuracy first. Speed comes later.', 'That\'s okay. Mistakes are how we learn the trail.'],
   };
-  return `<div class="wolf-react">${myWolf(p, tone === 'great' ? 'excited' : 'happy', { scene: false })}<div class="bubble">${esc(pick(lines[tone]))}</div></div>`;
+  const showOff = tone === 'great' ? ['spin', 'dance', 'leap', 'wag'].filter(id => p.wolf.tricks?.includes(id)) : [];
+  const svg = myWolf(p, tone === 'great' ? 'excited' : 'happy', { scene: false });
+  return `<div class="wolf-react">${showOff.length ? svg.replace('class="wolf ', `class="wolf trick-${pick(showOff)} `) : svg}<div class="bubble">${esc(pick(lines[tone]))}</div></div>`;
 }
-// Called from celebrations(): the wolf growing, and gear that new badges unlocked.
+// Tricks
+const trickKnown = (p, t) => t.badge ? !!p.badges?.[t.badge] : t.stage != null ? wolfStage(p) >= t.stage : true;
+const trickHow = (p, t) => t.badge ? badgeHow(t.badge) : t.stage != null ? `Grow ${p.wolf.name} into ${WOLF_STAGES[t.stage].name} (level ${WOLF_STAGES[t.stage].level})` : '';
+const TRICK_SOUNDS = {
+  sit: () => Sound.tone(392, 0.15, { gain: 0.04 }),
+  wag: () => [0, 0.2, 0.4, 0.6].forEach(at => Sound.tone(1400, 0.04, { at, type: 'triangle', gain: 0.03 })),
+  paw: () => Sound.tone(660, 0.18, { gain: 0.04 }),
+  bow: () => Sound.tone(523, 0.2, { gain: 0.04 }),
+  spin: () => [523, 659, 784].forEach((f, i) => Sound.tone(f, 0.12, { at: i * 0.1, gain: 0.04 })),
+  roll: () => [784, 659, 523, 659, 784].forEach((f, i) => Sound.tone(f, 0.1, { at: i * 0.12, gain: 0.04 })),
+  leap: () => [523, 1047].forEach((f, i) => Sound.tone(f, 0.15, { at: i * 0.2, gain: 0.05 })),
+  beg: () => [659, 784].forEach((f, i) => Sound.tone(f, 0.15, { at: i * 0.3, gain: 0.04 })),
+  howl: () => Sound.howl(),
+  dance: () => Sound.pass(),
+};
+// Play a trick on the wolf inside `host`. Tricks that change his face redraw
+// him for the length of the trick, then put him back.
+function playTrick(host, p, id, { scene = true, count = true, sound = true } = {}) {
+  const t = WOLF_TRICKS.find(x => x.id === id);
+  if (!t || !host) return;
+  const base = host.innerHTML;
+  if (t.mood) host.innerHTML = myWolf(p, t.mood, { scene });
+  const svg = $('svg.wolf', host);
+  svg?.classList.add(`trick-${id}`);
+  if (sound) TRICK_SOUNDS[id]?.();
+  clearTimeout(host._trick);
+  host._trick = setTimeout(() => { if (t.mood) host.innerHTML = base; else svg?.classList.remove(`trick-${id}`); }, t.ms);
+  if (count) { p.wolf.tricksDone = (p.wolf.tricksDone || 0) + 1; save(); }
+}
+
+// Called from celebrations(): the wolf growing, new tricks, and gear that new badges unlocked.
 function wolfNews(p, newBadgeIds) {
   let html = '';
+  const learned = WOLF_TRICKS.filter(t => !p.wolf.tricks.includes(t.id) && trickKnown(p, t));
+  if (learned.length) {
+    p.wolf.tricks.push(...learned.map(t => t.id));
+    html += `<div class="evolve trick-news">${myWolf(p, learned[0].mood || 'excited', { scene: false }).replace('class="wolf ', `class="wolf trick-${learned[0].id} `)}<div>
+      <b>${esc(p.wolf.name)} learned ${learned.length === 1 ? 'a new trick' : `${learned.length} new tricks`}: ${learned.map(t => `${t.icon} ${esc(t.name)}`).join(', ')}!</b>
+      <p>Ask for ${learned.length === 1 ? 'it' : 'them'} in the den.</p></div></div>`;
+  }
   const stage = wolfStage(p);
   if (stage > p.wolf.stageSeen) {
     const scenes = WOLF_SCENES.filter(s => s.stage != null && s.stage > p.wolf.stageSeen && s.stage <= stage);
@@ -1760,7 +1983,7 @@ SCREENS.den = function () {
       <p class="muted" style="margin-top:6px">Your timberwolf grows as you level up, and badges unlock gear and places to visit.</p></div></div>
     <div class="den">
       <div class="card den-wolf">
-        ${myWolf(p, wolfHomeMood(p) === 'sleepy' ? 'sleepy' : 'happy')}
+        <div id="den-pic">${myWolf(p, wolfHomeMood(p) === 'sleepy' ? 'sleepy' : 'happy')}</div>
         <div class="den-name"><input type="text" id="wolf-name" maxlength="20" value="${esc(p.wolf.name)}" aria-label="Your wolf's name" autocomplete="off"><span class="muted small">✎ rename</span></div>
         <b>${esc(WOLF_STAGES[stage].name)}</b> <span class="muted small">· stage ${stage + 1} of ${WOLF_STAGES.length}</span>
         <p class="muted small" style="margin-top:4px">${esc(WOLF_STAGES[stage].say)}</p>
@@ -1774,9 +1997,21 @@ SCREENS.den = function () {
         <div class="gear-row">${WOLF_SCENES.map(sc => itemBtn('scene', '', sc)).join('')}</div>
       </div>
     </div>
+    <div class="section-title">Tricks · ${WOLF_TRICKS.filter(t => trickKnown(p, t)).length} of ${WOLF_TRICKS.length} learned</div>
+    <div class="trick-grid">${WOLF_TRICKS.map(t => {
+      const known = trickKnown(p, t);
+      return `<button class="trick-btn ${known ? '' : 'locked'}" data-trick="${t.id}" ${known ? '' : 'disabled'} title="${esc(known ? `Ask ${p.wolf.name} to ${t.name.toLowerCase()}` : trickHow(p, t))}">
+        <span class="ic">${t.icon}</span><span><b>${esc(t.name)}</b><small>${known ? 'Do it!' : `🔒 ${esc(trickHow(p, t))}`}</small></span></button>`;
+    }).join('')}</div>
+
     <div class="section-title">Growing up · ${stage + 1} of ${WOLF_STAGES.length} stages</div>
     <div class="stage-grid">${WOLF_STAGES.map((s, i) => `<div class="stage-tile ${i <= stage ? 'got' : ''} ${i === stage ? 'now' : ''}" title="${esc(s.say)}">
       ${wolfSVG({ stage: i, silhouette: i > stage })}<b>${i <= stage ? esc(s.name) : '???'}</b><span class="muted small">Level ${s.level}</span></div>`).join('')}</div>`;
+  $$('[data-trick]:not([disabled])').forEach(b => b.onclick = () => {
+    playTrick($('#den-pic'), p, b.dataset.trick);
+    $('#den-pic').scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    if (newBadges(p).length) save();   // a trick badge may have just been earned
+  });
   const name = $('#wolf-name');
   const rename = () => { const v = name.value.trim().slice(0, 20); if (v && v !== p.wolf.name) { p.wolf.name = v; save(); go('den'); } };
   name.addEventListener('change', rename);
@@ -1811,7 +2046,7 @@ function weekReport(p, start) {
   const runs = p.history.filter(h => between(h.t, start, end));
   const prev = p.history.filter(h => between(h.t, prevStart, start));
   const trend = r => r.filter(countsForTrend);
-  const avg = (r, k) => r.length ? mean(r.map(h => h[k])) : null;
+  const avg = wavg;
   const mins = r => r.reduce((a, h) => a + h.ms, 0) / 60000;
   const days = r => new Set(r.map(h => new Date(h.t).toDateString())).size;
   const current = +end > Date.now();
@@ -1851,7 +2086,7 @@ function weekReport(p, start) {
   const grades = {
     Consistency: { g: grade(days(runs) / daysSoFar, [6 / 7, 4 / 7, 3 / 7, 1 / 7]), why: `Practiced ${days(runs)} of ${daysSoFar} day${daysSoFar === 1 ? '' : 's'}` },
     Effort: { g: grade(minutes / (goalMin * daysSoFar), [0.9, 0.65, 0.4, 0.15]), why: `${Math.round(minutes)} of ${goalMin * daysSoFar} goal minutes` },
-    Accuracy: { g: grade(acc, [97, 95, 92, 88]), why: acc == null ? 'No passages, checks or drills yet' : `${fmtAcc(acc)} on average` },
+    Accuracy: { g: grade(acc, [97, 95, 92, 88]), why: acc == null ? 'No passages, checks or speed tests yet' : `${fmtAcc(acc)} on average` },
     Speed: { g: grade(speedChange, [1.5, 0.3, -0.5, -2]), why: speedChange == null ? (speed == null ? 'No speed runs yet' : 'Nothing to compare with last week') : `${speedChange >= 0 ? '+' : '−'}${Math.abs(speedChange).toFixed(1)} WPM from last week` },
   };
 
@@ -2280,6 +2515,19 @@ const Sound = {
   error() { this.tone(160, 0.12, { type: 'square', gain: 0.035 }); },
   done() { [659, 784, 988].forEach((f, i) => this.tone(f, 0.22, { at: i * 0.09, gain: 0.05 })); },
   pass() { [523, 659, 784, 1047].forEach((f, i) => this.tone(f, i === 3 ? 0.5 : 0.2, { at: i * 0.11, gain: 0.06 })); },
+  // A rising and falling wolf howl.
+  howl() {
+    if (!this.on()) return;
+    try {
+      this.ctx ||= new (window.AudioContext || window.webkitAudioContext)();
+      if (this.ctx.state === 'suspended') this.ctx.resume();
+      const t = this.ctx.currentTime, o = this.ctx.createOscillator(), g = this.ctx.createGain();
+      o.type = 'sine';
+      o.frequency.setValueAtTime(330, t); o.frequency.linearRampToValueAtTime(560, t + 0.5); o.frequency.linearRampToValueAtTime(470, t + 1.4);
+      g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(0.06, t + 0.15); g.gain.linearRampToValueAtTime(0.0001, t + 1.6);
+      o.connect(g).connect(this.ctx.destination); o.start(t); o.stop(t + 1.7);
+    } catch { /* no audio available */ }
+  },
 };
 function paintSoundBtn() {
   const b = $('#btn-sound');

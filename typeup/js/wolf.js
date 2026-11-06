@@ -93,6 +93,21 @@ const WOLF_SCENES = [
   { id: 'aurora',  name: 'Northern lights',   badge: null, stage: WOLF_ALPHA },   // reaching Alpha
 ];
 
+// Tricks your wolf learns at milestones (a badge, or a stage he grows into).
+// Each plays as a short animation; mood swaps his face while it runs.
+const WOLF_TRICKS = [
+  { id: 'sit',   name: 'Sit',              icon: '🪑', ms: 900 },
+  { id: 'wag',   name: 'Wag',              icon: '〰️', ms: 1500, badge: 'l1' },
+  { id: 'paw',   name: 'Shake paw',        icon: '🐾', ms: 1600, stage: 3 },
+  { id: 'bow',   name: 'Play bow',         icon: '🙇', ms: 1600, badge: 's3' },
+  { id: 'spin',  name: 'Spin',             icon: '🌀', ms: 1000, badge: 'plan1' },
+  { id: 'roll',  name: 'Roll over',        icon: '🔄', ms: 1400, stage: 8 },
+  { id: 'leap',  name: 'Leap',             icon: '⤴️', ms: 900,  badge: 'w25' },
+  { id: 'beg',   name: 'Stand up and beg', icon: '🙏', ms: 1700, badge: 'g10' },
+  { id: 'howl',  name: 'Howl on cue',      icon: '🌕', ms: 2000, stage: 13, mood: 'howl' },
+  { id: 'dance', name: 'Happy dance',      icon: '💃', ms: 1800, badge: 'keys', mood: 'excited' },
+];
+
 const wolfStageFor = level => WOLF_STAGES.reduce((s, st, i) => (level >= st.level ? i : s), 0);
 let wolfUid = 0;
 
@@ -118,15 +133,26 @@ function wolfSVG({ stage = 0, mood = 'happy', gear = {}, scene = null, cls = '',
   const tailPts = [[100 + bw * 0.55, 186], [100 + bw * 1.1, 187], [100 + bw * 1.38, 181], T,
     [100 + bw * 1.38, 170 - bh * 0.12], [100 + bw * 1.26, 175 - bh * 0.06], [100 + bw * 1.08, 166 - bh * 0.12], [100 + bw * 0.92, 172], [100 + bw * 0.5, 172]];
   const tail = poly(tailPts, C.fur);
+  const tailGroup = (ow) => `<g class="wolf-tail" style="transform-box:view-box;transform-origin:${(100 + bw * 0.6).toFixed(1)}px 180px">
+    <g class="wolf-ol" style="--wl:${C.line};--ow:${ow}px">${tail}</g>${tail}${poly([T, [100 + bw * 1.38, 181], [100 + bw * 1.38, 170 - bh * 0.12]], C.dark)}</g>`;
   const haunches = lr(s => poly([[100 + s * bw * 0.35, 186], [100 + s * bw * 1.12, 186], [100 + s * bw * 1.08, 186 - bh * 0.3], [100 + s * bw * 0.7, 186 - bh * 0.44], [100 + s * bw * 0.38, 186 - bh * 0.32]], C.fur));
   const sh = 0.55 + 0.2 * m, shoulder = 1.05 + 0.1 * m;
   const bodyPts = [[100 - bw * sh, top], [100 + bw * sh, top], [100 + bw * shoulder, top + bh * 0.26], [100 + bw * (0.95 - 0.17 * m), 186], [100 - bw * (0.95 - 0.17 * m), 186], [100 - bw * shoulder, top + bh * 0.26]];
   const body = poly(bodyPts, C.fur);
   const lw = leg * (1 + 0.22 * m);
   const legX = s => 100 + s * bw * 0.29;
-  const legs = lr(s => `<rect x="${legX(s) - lw / 2}" y="${top + bh * 0.4}" width="${lw}" height="${186 - (top + bh * 0.4) - 2}" rx="${lw * (0.45 - 0.3 * m)}" fill="${C.fur}"/>`);
-  // Just the sides of each front leg, so the legs stand apart from the chest.
-  const legEdges = lr(s => `<path d="M ${legX(s) - lw / 2} ${top + bh * 0.56} V 181 M ${legX(s) + lw / 2} ${top + bh * 0.56} V 181" stroke="${C.dark}" stroke-width="1.8" stroke-linecap="round" opacity="${0.3 + 0.4 * m}"/>`);
+  // Each front leg is its own group, pivoting at the shoulder, so tricks can lift it.
+  const legTop = top + bh * 0.4;
+  const legs = lr(s => {
+    const x = legX(s), x0 = x - lw / 2, x1 = x + lw / 2;
+    return `<g class="wolf-leg leg-${s < 0 ? 'l' : 'r'}" style="transform-box:view-box;transform-origin:${x.toFixed(1)}px ${legTop.toFixed(1)}px">
+      <rect x="${x0}" y="${legTop}" width="${lw}" height="${186 - legTop - 2}" rx="${lw * (0.45 - 0.3 * m)}" fill="${C.fur}"/>
+      <path d="M ${x0} ${top + bh * 0.52} V 183 M ${x1} ${top + bh * 0.52} V 183" stroke="${C.line}" stroke-width="${2 + m}" stroke-linecap="round"/>
+      <rect x="${x - lw * 0.2}" y="${top + bh * 0.62}" width="${lw * 0.4}" height="${186 - (top + bh * 0.62) - 5}" fill="${C.cream}" opacity="${0.6 - 0.35 * m}"/>
+      <polygon points="${pts([[x - lw * 0.8, 186], [x - lw * 0.62, 181], [x + lw * 0.62, 181], [x + lw * 0.8, 186]])}" fill="${C.cream}" stroke="${C.line}" stroke-width="1.6" stroke-linejoin="round"/>
+      <path d="M ${x - lw * 0.25} 182 v 4 M ${x + lw * 0.25} 182 v 4" stroke="${C.dark}" stroke-width="1.3" opacity="0.6"/>
+    </g>`;
+  });
   const mane = (R, depth, color, n = 16) => {
     const cy = hy + r * 0.55, list = [];
     for (let i = 0; i <= n; i++) {
@@ -152,11 +178,7 @@ function wolfSVG({ stage = 0, mood = 'happy', gear = {}, scene = null, cls = '',
   const bodyDetail = `
     ${lr(s => poly([[100 + s * bw * shoulder, top + bh * 0.26], [100 + s * bw * 0.56, top + bh * 0.16], [100 + s * bw * 0.56, 186], [100 + s * bw * (0.95 - 0.17 * m), 186]], C.shade, 'opacity="0.55"'))}
     ${lr(s => poly([[100 + s * bw * sh, top], [100 + s * bw * shoulder, top + bh * 0.26], [100 + s * bw * 0.6, top + bh * 0.12]], C.dark, `opacity="${0.45 + 0.35 * m}"`))}
-    ${poly([[100 - bw * 0.45, top + bh * 0.05], [100 + bw * 0.45, top + bh * 0.05], [100 + bw * 0.22, top + bh * 0.5], [100, top + bh * 0.92], [100 - bw * 0.22, top + bh * 0.5]], C.cream)}
-    ${lr(s => `<rect x="${legX(s) - lw * 0.2}" y="${top + bh * 0.62}" width="${lw * 0.4}" height="${186 - (top + bh * 0.62) - 5}" fill="${C.cream}" opacity="${0.6 - 0.35 * m}"/>
-      ${poly([[legX(s) - lw * 0.8, 186], [legX(s) - lw * 0.62, 181], [legX(s) + lw * 0.62, 181], [legX(s) + lw * 0.8, 186]], C.cream)}
-      <path d="M ${legX(s) - lw * 0.25} 182 v 4 M ${legX(s) + lw * 0.25} 182 v 4" stroke="${C.dark}" stroke-width="1.3" opacity="0.6"/>`)}
-    ${poly([T, [100 + bw * 1.38, 181], [100 + bw * 1.38, 170 - bh * 0.12]], C.dark)}${legEdges}`;
+    ${poly([[100 - bw * 0.45, top + bh * 0.05], [100 + bw * 0.45, top + bh * 0.05], [100 + bw * 0.22, top + bh * 0.5], [100, top + bh * 0.92], [100 - bw * 0.22, top + bh * 0.5]], C.cream)}`;
   const maneInner = ruff > 0 ? mane(r * 0.72 + 8 * ruff, 0.66, C.cream) + mane(r * 0.92 + 12 * ruff, 0.9, C.dark, 8).replace('<polygon', '<polygon opacity="0.25"') : '';
   const earDetail = lr(s => {
     const [a, t, b] = earPts(s), c = [(a[0] + b[0] + t[0]) / 3, (a[1] + b[1] + t[1]) / 3];
@@ -260,7 +282,7 @@ function wolfSVG({ stage = 0, mood = 'happy', gear = {}, scene = null, cls = '',
       return `<path d="M ${x} ${y - s} L ${x + s * 0.3} ${y - s * 0.3} L ${x + s} ${y} L ${x + s * 0.3} ${y + s * 0.3} L ${x} ${y + s} L ${x - s * 0.3} ${y + s * 0.3} L ${x - s} ${y} L ${x - s * 0.3} ${y - s * 0.3} Z" fill="#f4f7fa"/>`; }).join('')}` : '';
   const glow = stage === WOLF_LEGEND && !silhouette ? `<circle cx="100" cy="${hy + 20}" r="92" fill="url(#${id}-glow)"/>` : '';
   const headTilt = mood === 'howl' ? `rotate(-16 100 ${hy + r * 0.6})` : top2 && mood !== 'sleepy' ? `rotate(-5 100 ${hy + r * 0.6})` : '';
-  const outline = `<g class="wolf-ol" style="--wl:${C.line};--ow:${(5 + 2.5 * m).toFixed(1)}px">${tail}${haunches}${body}${legs}${maneOuter}</g>`;
+  const outline = `<g class="wolf-ol" style="--wl:${C.line};--ow:${(5 + 2.5 * m).toFixed(1)}px">${haunches}${body}${maneOuter}</g>`;
   const headOutline = `<g class="wolf-ol" style="--wl:${C.line};--ow:${(5 + 2.5 * m).toFixed(1)}px">${ears}${head}</g>`;
 
   return `<svg class="wolf mood-${mood} ${cls}" viewBox="0 -22 200 212" role="img" aria-label="${silhouette ? 'A stage still to come' : `${WOLF_STAGES[stage].name}, feeling ${mood}`}">
@@ -270,10 +292,12 @@ function wolfSVG({ stage = 0, mood = 'happy', gear = {}, scene = null, cls = '',
     </defs>
     ${scene ? `<g clip-path="url(#${id}-clip)">${sceneSVG(scene, id)}</g>` : ''}
     ${glow}${crest}
+    <g class="wolf-all" style="transform-box:view-box;transform-origin:100px 130px">
     <ellipse cx="100" cy="187" rx="${bw * 1.3}" ry="6" fill="#000" opacity="0.25"/>
-    <g class="wolf-body">${outline}${tail}${haunches}${body}${legs}${bodyDetail}${maneOuter}${maneInner}${neckGear}</g>
+    <g class="wolf-body">${tailGroup((5 + 2.5 * m).toFixed(1))}${outline}${haunches}${body}${bodyDetail}${legs}${maneOuter}${maneInner}${neckGear}</g>
     <g class="wolf-head" transform="${headTilt}">${headOutline}${ears}${earDetail}${head}${face}${eyes}${nose}${mouth}${silhouette ? '' : eyeGear + headGear}</g>
     ${silhouette ? '' : extras}
+    </g>
   </svg>`;
 }
 

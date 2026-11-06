@@ -7,7 +7,7 @@
 // Loaded before app.js; the app's helpers are only called once it's running.
 // ═══════════════════════════════════════════════════════════════════════════
 
-const BADGES_VERSION = 4;
+const BADGES_VERSION = 5;
 
 const BADGE_GROUPS = {
   lessons:  'Lessons',
@@ -180,6 +180,9 @@ const BADGES = [
   { id: 'wolfalpha', group: 'wolf', icon: '🌌', name: 'Alpha', how: 'Raise your wolf into an Alpha (level 32)', test: c => wolfStage(c.p) >= WOLF_ALPHA },
   { id: 'wolflegend', group: 'wolf', icon: '✨', name: 'Legend of the North', how: 'Raise your wolf into a Legend of the North (level 36)', test: c => wolfStage(c.p) >= WOLF_LEGEND },
   { id: 'wolfdress', group: 'wolf', icon: '🎽', name: 'Dressed up', how: 'Put some gear on your wolf in the den', test: c => Object.keys(c.p.wolf?.gear || {}).length > 0 },
+  { id: 'trick3', group: 'wolf', icon: '🦴', name: 'Good boy', how: 'Teach your wolf 3 tricks besides Sit', test: c => (c.p.wolf?.tricks || []).filter(id => id !== 'sit').length >= 3 },
+  { id: 'trickall', group: 'wolf', icon: '🎪', name: 'Show-off', how: 'Teach your wolf all 10 tricks', test: c => WOLF_TRICKS.every(t => (c.p.wolf?.tricks || []).includes(t.id)) },
+  { id: 'trick25', group: 'wolf', icon: '🎭', name: 'Showtime', how: 'Ask your wolf for 25 tricks in the den', test: c => (c.p.wolf?.tricksDone || 0) >= 25 },
   { id: 'wolfscene', group: 'wolf', icon: '🏕️', name: 'New scenery', how: 'Take your wolf somewhere new from the den', test: c => !!c.p.wolf && c.p.wolf.scene !== 'den' },
 
   // ── Just for fun ───────────────────────────────────────────────────────
