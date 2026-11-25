@@ -110,6 +110,17 @@
         "."
       ],
       "port": 3022
+    },
+    {
+      "name": "Kindness Advent",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": [
+        "serve",
+        "-p",
+        "3023",
+        "advent"
+      ],
+      "port": 3023
     }
   ]
 }

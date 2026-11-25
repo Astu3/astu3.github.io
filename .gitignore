@@ -14,6 +14,7 @@
 !/nestegg/
 !/tabletalk/
 !/choreboard/
+!/advent/
 !/.claude/
 /.claude/*
 !/.claude/launch.json
