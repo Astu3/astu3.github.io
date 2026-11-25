@@ -77,6 +77,17 @@
         "typeup"
       ],
       "port": 3018
+    },
+    {
+      "name": "Nest Egg",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": [
+        "serve",
+        "-p",
+        "3019",
+        "nestegg"
+      ],
+      "port": 3019
     }
   ]
 }
