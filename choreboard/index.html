@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Chore Board</title>
+<meta name="description" content="The family chore chart. Kids check off chores, a parent approves, and the pay goes straight into their Nest Egg jars.">
+<meta name="theme-color" content="#0d1020">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="manifest" href="manifest.json">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<header class="topbar" id="topbar" hidden>
+  <button class="brand" data-go="home" aria-label="Chore Board home"><img src="icon.svg" alt=""><span>Chore<b>Board</b></span></button>
+  <div class="top-right">
+    <button class="icon-btn" id="btn-sound" aria-label="Sound" title="Sound">🔊</button>
+    <button class="parent-btn" id="btn-parent"></button>
+  </div>
+</header>
+<main id="app"></main>
+<div id="modal-root"></div>
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+<canvas id="confetti" aria-hidden="true"></canvas>
+<script src="js/app.js"></script>
+</body>
+</html>

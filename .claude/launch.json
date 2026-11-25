@@ -99,6 +99,17 @@
         "tabletalk"
       ],
       "port": 3020
+    },
+    {
+      "name": "Family site (all apps)",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": [
+        "serve",
+        "-p",
+        "3022",
+        "."
+      ],
+      "port": 3022
     }
   ]
 }
