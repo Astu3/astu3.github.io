@@ -88,6 +88,17 @@
         "nestegg"
       ],
       "port": 3019
+    },
+    {
+      "name": "Table Talk",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": [
+        "serve",
+        "-p",
+        "3020",
+        "tabletalk"
+      ],
+      "port": 3020
     }
   ]
 }
